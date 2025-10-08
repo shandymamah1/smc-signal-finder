@@ -1,154 +1,58 @@
 #!/usr/bin/env node
 /**
- * signal-finder.mjs
- * Stable + Strongly Confirmed Signals + Browser Alert + Highlight
+ * Ultra-Strong Multi-Timeframe SMC Signal Finder
+ * + 5 timeframes (10s, 1m, 5m, 15m, 30m)
+ * + Persistent confirmed signals
+ * + ATR-based SL/TP
+ * + Express HTML table
+ * + Latest signal highlight + beep alert
  */
 
 import express from "express";
 import WebSocket from "ws";
-import readline from "readline";
 import chalk from "chalk";
+import { exec } from "child_process";
 
-/* ===== CONFIG ===== */
+// ===== CONFIG =====
 const API_TOKEN = "MrUiWBFYmsfrsjC";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
-const MAX_HISTORY = 200;
+const MAX_HISTORY = 20;
 const MINI_CANDLE_MS = 10_000;
-const COOLDOWN_MS = 60 * 1000;
-const MIN_HOLD_MS = 30 * 1000;
-const MAX_SIGNALS_STORED = 20;
-const CONFIRM_SET = 3;
-const CONFIRM_FLIP = 2;
+const TIMEFRAMES = [60_000, 300_000, 900_000, 1_800_000]; // 1m, 5m, 15m, 30m
 const EMA_FAST = 5;
 const EMA_SLOW = 15;
 const RSI_PERIOD = 14;
 
-/* ===== STATE ===== */
+// ===== STATE =====
 const miniCandles = {};
 const timeframeCandles = {};
-const lastSignalAt = {};
-const currentSignal = {};
-const candidateCounts = {};
+const confirmedSignals = {}; // persistent confirmed signal per symbol
 const signalsQueue = [];
 
-/* ===== READLINE ===== */
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-rl.on("line", (line) => {
-  const cmd = line.trim().toLowerCase();
-  if (cmd === "list") renderSignals();
-  if (cmd === "refresh") signalsQueue.length = 0;
-});
-
-/* ===== EXPRESS ===== */
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.get("/", (req, res) => {
-  res.send("SMC Signal Finder is running ✅ <br><br>View live signals at <a href='/signals'>/signals</a>");
-});
-
-app.get("/signals", (req, res) => {
-  let latest = signalsQueue[0]?.ts || 0;
-
-  let tableRows = signalsQueue.map((sig, i) => {
-    const highlightClass = sig.ts === latest ? "highlight" : "";
-    return `
-      <tr class="${highlightClass}">
-        <td>${sig.symbol}</td>
-        <td style="color:${sig.action === "BUY" ? "green" : "red"}; font-weight:bold;">${sig.action}</td>
-        <td>${Number(sig.entry).toFixed(5)}</td>
-        <td>${Number(sig.sl).toFixed(5)}</td>
-        <td>${Number(sig.tp).toFixed(5)}</td>
-        <td>${Number(sig.atr).toFixed(5)}</td>
-        <td>${new Date(sig.ts).toLocaleTimeString()}</td>
-      </tr>`;
-  }).join("");
-
-  if (!tableRows) {
-    tableRows = `<tr><td colspan="7" style="text-align:center;">No signals yet ⚡</td></tr>`;
-  }
-
-  res.send(`
-    <!doctype html>
-    <html>
-    <head>
-      <meta charset="utf-8"/>
-      <meta http-equiv="refresh" content="5" />
-      <title>SMC Signal Finder - Live Signals</title>
-      <style>
-        body { font-family: Arial, sans-serif; background:#f8f9fa; padding:20px; }
-        h2 { text-align:center; }
-        table { border-collapse: collapse; width:100%; background:white; box-shadow:0 0 10px rgba(0,0,0,0.1); }
-        th, td { padding:10px; border:1px solid #ddd; text-align:center; }
-        th { background:#007bff; color:white; }
-        tr.highlight { animation: flash 2s ease-in-out; }
-        @keyframes flash {
-          0% { background: #fff7c2; }
-          50% { background: #fff2a8; }
-          100% { background: white; }
-        }
-        .small { font-size:12px; color:#666; text-align:center; margin-top:8px; }
-      </style>
-    </head>
-    <body>
-      <h2>📊 Live SMC Signals</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Symbol</th>
-            <th>Action</th>
-            <th>Entry</th>
-            <th>Stop Loss</th>
-            <th>Take Profit</th>
-            <th>ATR</th>
-            <th>When</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${tableRows}
-        </tbody>
-      </table>
-      <p class="small">Auto-refreshes every 5s. Keeps last ${MAX_SIGNALS_STORED} signals.</p>
-
-      <audio id="alertSound">
-        <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
-      </audio>
-      <script>
-        const sound = document.getElementById("alertSound");
-        // play alert if highlighted signal exists
-        if (document.querySelector(".highlight")) {
-          sound.volume = 0.4;
-          sound.play().catch(()=>{});
-        }
-      </script>
-    </body>
-    </html>
-  `);
-});
-
-app.listen(PORT, () => console.log(`🌐 Express server on port ${PORT}`));
-
-/* ===== INDICATORS ===== */
+// ===== UTILITIES =====
 function EMA(arr, period) {
-  if (!arr.length) return [];
+  if (arr.length < period) return arr[arr.length - 1] || 0;
   const k = 2 / (period + 1);
-  const out = [arr[0]];
-  for (let i = 1; i < arr.length; i++) out[i] = arr[i] * k + out[i - 1] * (1 - k);
-  return out;
+  let ema = arr[arr.length - period];
+  for (let i = arr.length - period + 1; i < arr.length; i++)
+    ema = arr[i] * k + ema * (1 - k);
+  return ema;
 }
 
 function RSI(arr, period = RSI_PERIOD) {
   if (arr.length < period + 1) return 50;
   let gains = 0, losses = 0;
-  for (let i = arr.length - period; i < arr.length; i++) {
+  for (let i = arr.length - period + 1; i < arr.length; i++) {
     const diff = arr[i] - arr[i - 1];
-    if (diff > 0) gains += diff; else losses -= diff;
+    if (diff > 0) gains += diff;
+    else losses -= diff;
   }
-  return losses === 0 ? 100 : 100 - (100 / (1 + gains / losses));
+  if (losses === 0) return 100;
+  return 100 - (100 / (1 + gains / losses));
 }
 
 function ATR(c) {
-  if (c.length < 2) return 0;
+  if (!c || c.length < 2) return 0;
   let sum = 0;
   for (let i = 1; i < c.length; i++) {
     const tr = Math.max(
@@ -161,16 +65,16 @@ function ATR(c) {
   return sum / (c.length - 1);
 }
 
-/* ===== CANDLE MANAGEMENT ===== */
+// ===== CANDLE MANAGEMENT =====
 function updateMiniCandle(symbol, price, ts) {
   if (!miniCandles[symbol]) miniCandles[symbol] = [];
   const candles = miniCandles[symbol];
   const periodTs = Math.floor(ts / MINI_CANDLE_MS) * MINI_CANDLE_MS;
-  const last = candles[candles.length - 1];
+  let last = candles[candles.length - 1];
   if (!last || last.ts !== periodTs) {
-    if (last) evaluateConfirmations(symbol);
-    candles.push({ open: price, high: price, low: price, close: price, ts: periodTs });
-    if (candles.length > MAX_HISTORY) candles.shift();
+    last = { open: price, high: price, low: price, close: price, ts: periodTs };
+    candles.push(last);
+    if (candles.length > 200) candles.shift();
   } else {
     last.high = Math.max(last.high, price);
     last.low = Math.min(last.low, price);
@@ -178,75 +82,79 @@ function updateMiniCandle(symbol, price, ts) {
   }
 }
 
-/* ===== CONFIRMATION LOGIC ===== */
-function evaluateConfirmations(symbol) {
-  const candles = miniCandles[symbol];
-  if (!candles || candles.length < EMA_SLOW + 1) return;
-
-  const closed = candles.slice(0, -1);
-  const closes = closed.map(c => c.close);
-  const emaFast = EMA(closes, EMA_FAST);
-  const emaSlow = EMA(closes, EMA_SLOW);
-  const rsi = RSI(closes);
-
-  const buy = emaFast.at(-1) > emaSlow.at(-1) && rsi > 55;
-  const sell = emaFast.at(-1) < emaSlow.at(-1) && rsi < 45;
-
-  if (!candidateCounts[symbol]) candidateCounts[symbol] = { BUY: 0, SELL: 0 };
-  if (buy && !sell) {
-    candidateCounts[symbol].BUY++;
-    candidateCounts[symbol].SELL = 0;
-  } else if (sell && !buy) {
-    candidateCounts[symbol].SELL++;
-    candidateCounts[symbol].BUY = 0;
-  } else {
-    candidateCounts[symbol].BUY = candidateCounts[symbol].SELL = 0;
-  }
-
-  const now = Date.now();
-  const cur = currentSignal[symbol];
-
-  if (!cur) {
-    if (candidateCounts[symbol].BUY >= CONFIRM_SET) return createSignal(symbol, "BUY", closed);
-    if (candidateCounts[symbol].SELL >= CONFIRM_SET) return createSignal(symbol, "SELL", closed);
-  } else {
-    if (cur.action === "BUY" && candidateCounts[symbol].SELL >= CONFIRM_FLIP && now - cur.ts >= MIN_HOLD_MS)
-      return createSignal(symbol, "SELL", closed);
-    if (cur.action === "SELL" && candidateCounts[symbol].BUY >= CONFIRM_FLIP && now - cur.ts >= MIN_HOLD_MS)
-      return createSignal(symbol, "BUY", closed);
-  }
-}
-
-/* ===== SIGNAL CREATION ===== */
-function createSignal(symbol, action, closed) {
-  const closes = closed.map(c => c.close);
-  const lastClose = closes.at(-1);
-  const atr = ATR(closed.slice(-20)) || 0.00001;
-  const sl = action === "BUY" ? lastClose - atr * 3 : lastClose + atr * 3;
-  const tp = action === "BUY" ? lastClose + atr * 6 : lastClose - atr * 6;
-
-  const sig = { symbol, action, entry: lastClose, sl, tp, atr, ts: Date.now() };
-  currentSignal[symbol] = { action, ts: sig.ts };
-  lastSignalAt[symbol] = sig.ts;
-  signalsQueue.unshift(sig);
-  if (signalsQueue.length > MAX_SIGNALS_STORED) signalsQueue.splice(MAX_SIGNALS_STORED);
-  renderSignals();
-  process.stdout.write("\x07");
-}
-
-/* ===== TERMINAL RENDER ===== */
-function renderSignals() {
-  console.clear();
-  console.log(chalk.blue.bold("🚀 SMC Confirmed Volatility Signals (10s Candles)\n"));
-  if (!signalsQueue.length) console.log("Waiting for signals...\n");
-  signalsQueue.forEach((s, i) => {
-    const col = s.action === "BUY" ? chalk.green : chalk.red;
-    console.log(`${i + 1}. ${col(s.action)} ${s.symbol}`);
-    console.log(`   Entry: ${s.entry.toFixed(5)} | SL: ${s.sl.toFixed(5)} | TP: ${s.tp.toFixed(5)} | ATR: ${s.atr.toFixed(5)} | ${new Date(s.ts).toLocaleTimeString()}\n`);
+function updateTimeframeCandles(symbol, price, ts) {
+  if (!timeframeCandles[symbol]) timeframeCandles[symbol] = TIMEFRAMES.map(() => []);
+  TIMEFRAMES.forEach((tf, idx) => {
+    const candles = timeframeCandles[symbol][idx];
+    const periodTs = Math.floor(ts / tf) * tf;
+    let last = candles[candles.length - 1];
+    if (!last || last.ts !== periodTs) {
+      last = { open: price, high: price, low: price, close: price, ts: periodTs };
+      candles.push(last);
+      if (candles.length > 200) candles.shift();
+    } else {
+      last.high = Math.max(last.high, price);
+      last.low = Math.min(last.low, price);
+      last.close = price;
+    }
   });
 }
 
-/* ===== WEBSOCKET ===== */
+// ===== SIGNAL LOGIC =====
+function evaluateSymbol(symbol) {
+  const now = Date.now();
+  const mini = miniCandles[symbol];
+  const tfs = timeframeCandles[symbol];
+  if (!mini || !tfs) return;
+  if (mini.length < EMA_SLOW) return;
+
+  const closesMini = mini.map(c => c.close);
+  const emaFastMini = EMA(closesMini, EMA_FAST);
+  const emaSlowMini = EMA(closesMini, EMA_SLOW);
+  const rsiMini = RSI(closesMini);
+  const lastClose = closesMini[closesMini.length - 1];
+
+  // Multi-timeframe trend check
+  let trend = null; // BUY or SELL
+  for (let idx = 0; idx < TIMEFRAMES.length; idx++) {
+    const candles = tfs[idx];
+    if (candles.length < EMA_SLOW) return;
+    const closes = candles.map(c => c.close);
+    const emaFast = EMA(closes, EMA_FAST);
+    const emaSlow = EMA(closes, EMA_SLOW);
+    const rsi = RSI(closes);
+    if (emaFast > emaSlow && rsi > 50) {
+      if (trend === null) trend = "BUY";
+      else if (trend !== "BUY") return; // conflicting trend
+    } else if (emaFast < emaSlow && rsi < 50) {
+      if (trend === null) trend = "SELL";
+      else if (trend !== "SELL") return; // conflicting trend
+    } else return; // indecision
+  }
+
+  if (!trend) return;
+
+  // Persist confirmed signal
+  if (confirmedSignals[symbol] && confirmedSignals[symbol].action === trend) return; // already confirmed
+
+  const atr = ATR(mini);
+  const sl = trend === "BUY" ? lastClose - atr * 3 : lastClose + atr * 3;
+  const tp = trend === "BUY" ? lastClose + atr * 6 : lastClose - atr * 6;
+
+  const sig = { symbol, action: trend, entry: lastClose, sl, tp, atr, ts: now };
+  confirmedSignals[symbol] = sig;
+  signalsQueue.unshift(sig);
+  if (signalsQueue.length > MAX_HISTORY) signalsQueue.splice(MAX_HISTORY);
+
+  // Sound alert
+  exec("termux-notification -t 'SMC Signal' -c '" + trend + " " + symbol + "'");
+
+  // Terminal output
+  console.log(chalk.yellowBright(`\n📢 ${symbol} CONFIRMED ${trend}`));
+  console.log(`Entry: ${lastClose.toFixed(3)} | SL: ${sl.toFixed(3)} | TP: ${tp.toFixed(3)} | ATR: ${atr.toFixed(3)}`);
+}
+
+// ===== WEBSOCKET =====
 const ws = new WebSocket("wss://ws.binaryws.com/websockets/v3?app_id=1089");
 
 ws.on("open", () => {
@@ -259,13 +167,55 @@ ws.on("message", (msg) => {
   if (data.authorize) {
     console.log("✅ Authorized. Subscribing to symbols...");
     SYMBOLS.forEach(s => ws.send(JSON.stringify({ ticks: s })));
+    setInterval(() => SYMBOLS.forEach(evaluateSymbol), 500);
   } else if (data.tick) {
     const ts = Date.now();
     updateMiniCandle(data.tick.symbol, data.tick.quote, ts);
+    updateTimeframeCandles(data.tick.symbol, data.tick.quote, ts);
+  } else if (data.error) {
+    console.log("❌", data.error.message);
   }
 });
 
 ws.on("close", () => {
-  console.log("❌ Connection closed. Restarting...");
-  setTimeout(() => process.exit(1), 5000);
+  console.log("❌ Connection closed. Reconnecting in 5s...");
+  setTimeout(() => ws.terminate(), 5000);
 });
+
+// ===== EXPRESS SERVER (PRETTY HTML) =====
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => {
+  res.send(`
+    <h2>✅ SMC Ultra Signal Finder Running</h2>
+    <p>View live signals below:</p>
+    <a href="/signals" style="font-size: 18px; text-decoration: none;">➡️ Open /signals</a>
+  `);
+});
+
+app.get("/signals", (req, res) => {
+  let tableRows = signalsQueue.map((sig, idx) => `
+    <tr ${idx === 0 ? 'style="background:#fffbcc;"' : ''}>
+      <td>${sig.symbol}</td>
+      <td style="color:${sig.action === "BUY" ? "green" : "red"}; font-weight:bold;">
+        ${sig.action}
+      </td>
+      <td>${sig.entry.toFixed(3)}</td>
+      <td>${sig.sl.toFixed(3)}</td>
+      <td>${sig.tp.toFixed(3)}</td>
+      <td>${sig.atr.toFixed(3)}</td>
+    </tr>
+  `).join("");
+
+  if (!tableRows) tableRows = `<tr><td colspan="6" style="text-align:center;">No signals yet ⚡</td></tr>`;
+
+  res.send(`
+    <html>
+    <head>
+      <title>SMC Ultra Signals</title>
+      <meta http-equiv="refresh" content="5">
+      <style>
+        body { font-family: Arial, sans-serif; background:#f0f2f5; padding:20px; }
+        h2 { text-align:center; }
+        table { border-collapse: collapse; width:100%; background:white; box-shadow:0 0
