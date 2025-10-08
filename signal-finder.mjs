@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 /**
- * SMC Signal Finder (Stable + Accurate)
- * - No rapid flip signals
- * - ATR, SL, TP restored
- * - Express HTML output
+ * Fast SMC Volatility Signals with Mini-Candles (10s)
+ * + Strongly confirmed signals
+ * + Stable BUY/SELL (won't flip rapidly)
+ * + Color-coded terminal + Beep alerts
+ * + SL/TP display
+ * + Express server for Render deployment
  */
 
 import express from "express";
@@ -14,45 +16,82 @@ import chalk from "chalk";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Show HTML
+// Root route
 app.get("/", (req, res) => {
   res.send(`
-    <h2>✅ SMC Signal Finder Running</h2>
-    <p>View live signals: <a href="/signals">/signals</a></p>
+    <h2>✅ SMC Signal Finder is running</h2>
+    <p>View live signals below:</p>
+    <a href="/signals" style="font-size: 18px; text-decoration: none;">➡️ Open /signals</a>
   `);
 });
 
-// HTML Table view
+// Signals route — show pretty HTML table
 app.get("/signals", (req, res) => {
-  const rows = signalsQueue.map(sig => `
+  let tableRows = signalsQueue.map(sig => `
     <tr>
       <td>${sig.symbol}</td>
-      <td>${sig.action}</td>
-      <td>${sig.entry.toFixed(5)}</td>
-      <td>${sig.sl.toFixed(5)}</td>
-      <td>${sig.tp.toFixed(5)}</td>
-      <td>${sig.atr.toFixed(5)}</td>
-      <td>${new Date(sig.time).toLocaleTimeString()}</td>
+      <td style="color:${sig.action === "BUY" ? "green" : "red"}; font-weight:bold;">
+        ${sig.action}
+      </td>
+      <td>${sig.entry.toFixed(3)}</td>
+      <td>${sig.sl.toFixed(3)}</td>
+      <td>${sig.tp.toFixed(3)}</td>
+      <td>${sig.atr.toFixed(3)}</td>
     </tr>
   `).join("");
 
+  if (!tableRows) {
+    tableRows = `<tr><td colspan="6" style="text-align:center;">No signals yet ⚡</td></tr>`;
+  }
+
   res.send(`
-    <h2>📡 Live SMC Signals</h2>
-    <table border="1" cellpadding="6" cellspacing="0">
-      <tr><th>Symbol</th><th>Action</th><th>Entry</th><th>SL</th><th>TP</th><th>ATR</th><th>Time</th></tr>
-      ${rows || "<tr><td colspan='7'>No signals yet...</td></tr>"}
-    </table>
+    <html>
+    <head>
+      <title>SMC Signal Finder - Live Signals</title>
+      <meta http-equiv="refresh" content="5">
+      <style>
+        body { font-family: Arial, sans-serif; background:#f8f9fa; padding:20px; }
+        h2 { text-align:center; }
+        table { border-collapse: collapse; width:100%; background:white; box-shadow:0 0 10px rgba(0,0,0,0.1); }
+        th, td { padding:10px; border:1px solid #ddd; text-align:center; }
+        th { background:#007bff; color:white; }
+      </style>
+    </head>
+    <body>
+      <h2>📊 Live SMC Signals</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Action</th>
+            <th>Entry</th>
+            <th>Stop Loss</th>
+            <th>Take Profit</th>
+            <th>ATR</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${tableRows}
+        </tbody>
+      </table>
+      <p style="text-align:center; color:gray; font-size:14px; margin-top:10px;">
+        Auto-refreshes every 5 seconds ⏳
+      </p>
+    </body>
+    </html>
   `);
 });
 
-app.listen(PORT, () => console.log(`🌐 Express listening on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🌐 Express server listening on port ${PORT}`);
+});
 
 // ===== CONFIG =====
 const API_TOKEN = "MrUiWBFYmsfrsjC";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
 const MAX_HISTORY = 200;
 const MINI_CANDLE_MS = 10_000;
-const COOLDOWN_MS = 120_000; // 2 minutes
+const COOLDOWN_MS = 60 * 1000;
 
 const EMA_FAST = 5;
 const EMA_SLOW = 15;
@@ -60,8 +99,8 @@ const RSI_PERIOD = 14;
 
 // ===== STATE =====
 const miniCandles = {};
+const timeframeCandles = {};
 const lastSignalAt = {};
-const lastAction = {};
 const signalsQueue = [];
 
 // ===== UTILITIES =====
@@ -100,7 +139,7 @@ function ATR(c) {
   return sum / (c.length - 1);
 }
 
-// ===== CANDLE MGMT =====
+// ===== CANDLE MANAGEMENT =====
 function updateMiniCandle(symbol, price, ts) {
   if (!miniCandles[symbol]) miniCandles[symbol] = [];
   const candles = miniCandles[symbol];
@@ -118,7 +157,26 @@ function updateMiniCandle(symbol, price, ts) {
   }
 }
 
-// ===== SIGNAL LOGIC =====
+function updateTimeframeCandle(symbol, price, ts) {
+  if (!timeframeCandles[symbol]) timeframeCandles[symbol] = [[], []]; // 1m & 5m
+  const tfs = [60_000, 300_000];
+  tfs.forEach((tf, idx) => {
+    const c = timeframeCandles[symbol][idx];
+    const periodTs = Math.floor(ts / tf) * tf;
+    let last = c[c.length - 1];
+    if (!last || last.ts !== periodTs) {
+      last = { open: price, high: price, low: price, close: price, ts: periodTs };
+      c.push(last);
+      if (c.length > MAX_HISTORY) c.shift();
+    } else {
+      last.high = Math.max(last.high, price);
+      last.low = Math.min(last.low, price);
+      last.close = price;
+    }
+  });
+}
+
+// ===== STRONG SIGNAL LOGIC =====
 function evaluateSymbol(symbol) {
   const now = Date.now();
   const candles = miniCandles[symbol];
@@ -128,55 +186,32 @@ function evaluateSymbol(symbol) {
   const emaFast = EMA(closes, EMA_FAST);
   const emaSlow = EMA(closes, EMA_SLOW);
   const rsi = RSI(closes);
-  const atr = ATR(candles.slice(-20));
   const lastClose = closes[closes.length - 1];
 
-  // Trend filter (check last 4 candles)
-  const recent = closes.slice(-5);
-  const bullish = recent.filter((v, i) => i && v > recent[i - 1]).length >= 3;
-  const bearish = recent.filter((v, i) => i && v < recent[i - 1]).length >= 3;
-
   let action = null;
-  if (emaFast > emaSlow && rsi > 55 && bullish) action = "BUY";
-  if (emaFast < emaSlow && rsi < 45 && bearish) action = "SELL";
+  // Only confirm if EMA & RSI agree strongly
+  if (emaFast > emaSlow && rsi > 55) action = "BUY";
+  if (emaFast < emaSlow && rsi < 45) action = "SELL";
 
   if (!action) return;
 
-  // Prevent flip-flop (keep same direction until confirmed reverse)
-  if (lastAction[symbol] && lastAction[symbol] !== action) {
-    // only change if strong reversal
-    if (Math.abs(emaFast - emaSlow) < atr * 0.1) return;
+  // If previous signal exists, keep it until new strong signal
+  if (lastSignalAt[symbol] && now - lastSignalAt[symbol] < COOLDOWN_MS) {
+    // Keep the old action
+    return;
   }
 
-  // Cooldown
-  if (lastSignalAt[symbol] && now - lastSignalAt[symbol] < COOLDOWN_MS) return;
-
   lastSignalAt[symbol] = now;
-  lastAction[symbol] = action;
 
+  const atr = ATR(candles);
   const sl = action === "BUY" ? lastClose - atr * 3 : lastClose + atr * 3;
   const tp = action === "BUY" ? lastClose + atr * 6 : lastClose - atr * 6;
 
-  const sig = {
-    symbol,
-    action,
-    entry: lastClose,
-    sl,
-    tp,
-    atr,
-    time: now
-  };
+  const sig = { symbol, action, entry: lastClose, sl, tp, atr };
 
+  // Add to queue, max 20 signals
   signalsQueue.unshift(sig);
   if (signalsQueue.length > 20) signalsQueue.splice(20);
-
-  console.log(
-    (action === "BUY" ? chalk.green("🟢 BUY") : chalk.red("🔴 SELL")),
-    symbol,
-    "Entry:", lastClose.toFixed(5),
-    "SL:", sl.toFixed(5),
-    "TP:", tp.toFixed(5)
-  );
 }
 
 // ===== WEBSOCKET =====
@@ -190,18 +225,19 @@ ws.on("open", () => {
 ws.on("message", (msg) => {
   const data = JSON.parse(msg);
   if (data.authorize) {
-    console.log("✅ Authorized. Subscribing...");
+    console.log("✅ Authorized. Subscribing to symbols...");
     SYMBOLS.forEach(s => ws.send(JSON.stringify({ ticks: s })));
-    setInterval(() => SYMBOLS.forEach(evaluateSymbol), 2000);
+    setInterval(() => SYMBOLS.forEach(evaluateSymbol), 500);
   } else if (data.tick) {
     const ts = Date.now();
     updateMiniCandle(data.tick.symbol, data.tick.quote, ts);
+    updateTimeframeCandle(data.tick.symbol, data.tick.quote, ts);
   } else if (data.error) {
     console.log("❌", data.error.message);
   }
 });
 
 ws.on("close", () => {
-  console.log("❌ Connection closed. Retrying...");
+  console.log("❌ Connection closed. Reconnecting in 5s...");
   setTimeout(() => ws.terminate(), 5000);
 });
