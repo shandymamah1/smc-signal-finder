@@ -3,7 +3,7 @@
  * Fast SMC Volatility Signals with Mini-Candles (10s)
  * + Color-coded terminal + Beep alerts
  * + SL/TP display
- * + Express server for Render
+ * + Express server for Render deployment
  */
 
 import express from "express";
@@ -20,7 +20,7 @@ app.get("/", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Express server listening on port ${PORT}`);
+  console.log(`🌐 Express server listening on port ${PORT}`);
 });
 
 // ===== CONFIG =====
@@ -74,7 +74,11 @@ function ATR(c) {
   if (!c || c.length < 2) return 0;
   let sum = 0;
   for (let i = 1; i < c.length; i++) {
-    const tr = Math.max(c[i].high - c[i].low, Math.abs(c[i].high - c[i - 1].close), Math.abs(c[i].low - c[i - 1].close));
+    const tr = Math.max(
+      c[i].high - c[i].low,
+      Math.abs(c[i].high - c[i - 1].close),
+      Math.abs(c[i].low - c[i - 1].close)
+    );
     sum += tr;
   }
   return sum / (c.length - 1);
@@ -91,7 +95,6 @@ function updateMiniCandle(symbol, price, ts) {
     last = { open: price, high: price, low: price, close: price, ts: periodTs };
     candles.push(last);
     if (candles.length > MAX_HISTORY) candles.shift();
-    miniCandles[symbol] = candles;
   } else {
     last.high = Math.max(last.high, price);
     last.low = Math.min(last.low, price);
@@ -110,7 +113,6 @@ function updateTimeframeCandle(symbol, price, ts) {
       last = { open: price, high: price, low: price, close: price, ts: periodTs };
       c.push(last);
       if (c.length > MAX_HISTORY) c.shift();
-      timeframeCandles[symbol][idx] = c;
     } else {
       last.high = Math.max(last.high, price);
       last.low = Math.min(last.low, price);
