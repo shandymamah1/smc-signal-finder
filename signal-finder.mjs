@@ -8,7 +8,6 @@
 
 import express from "express";
 import WebSocket from "ws";
-import readline from "readline";
 import chalk from "chalk";
 
 // ===== EXPRESS SERVER =====
@@ -17,6 +16,11 @@ const PORT = process.env.PORT || 3000;
 
 app.get("/", (req, res) => {
   res.send("SMC Signal Finder is running ✅");
+});
+
+// Returns current signals in JSON
+app.get("/signals", (req, res) => {
+  res.json(signalsQueue);
 });
 
 app.listen(PORT, () => {
@@ -39,14 +43,6 @@ const miniCandles = {};
 const timeframeCandles = {};
 const lastSignalAt = {};
 const signalsQueue = [];
-
-// ===== READLINE =====
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-rl.on("line", (line) => {
-  const cmd = line.trim().toLowerCase();
-  if (cmd === "list") renderSignals();
-  if (cmd === "refresh") signalsQueue.length = 0;
-});
 
 // ===== UTILITIES =====
 function EMA(arr, period) {
@@ -149,21 +145,6 @@ function evaluateSymbol(symbol) {
   const sig = { symbol, action, entry: lastClose, sl, tp, atr };
   signalsQueue.unshift(sig);
   if (signalsQueue.length > 5) signalsQueue.splice(5);
-
-  renderSignals();
-  process.stdout.write("\x07"); // beep alert
-}
-
-function renderSignals() {
-  console.clear();
-  console.log(chalk.blue.bold("🚀 SMC Volatility Signals (Mini-Candles 10s)\n"));
-  if (!signalsQueue.length) console.log("Waiting for signals...\n");
-  signalsQueue.forEach((s, i) => {
-    const color = s.action === "BUY" ? chalk.green : chalk.red;
-    console.log(`${i + 1}. ${color(s.action)} ${s.symbol}`);
-    console.log(`   Entry: ${s.entry.toFixed(5)} | SL: ${s.sl.toFixed(5)} | TP: ${s.tp.toFixed(5)} | ATR: ${s.atr.toFixed(5)}\n`);
-  });
-  console.log(chalk.yellow("Commands: refresh | list"));
 }
 
 // ===== WEBSOCKET =====
