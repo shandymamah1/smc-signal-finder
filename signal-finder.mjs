@@ -13,19 +13,15 @@ import chalk from "chalk";
 const API_TOKEN = "MrUiWBFYmsfrsjC";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
 const MAX_HISTORY = 200;
-const MINI_CANDLE_MS = 10_000;
-const COOLDOWN_MS = 60 * 1000;
+const CANDLE_INTERVAL = 10; // 10s candles from API
 const MIN_HOLD_MS = 30 * 1000;
 const MAX_SIGNALS_STORED = 20;
-const CONFIRM_SET = 3;
-const CONFIRM_FLIP = 2;
 const EMA_FAST = 5;
 const EMA_SLOW = 15;
 const RSI_PERIOD = 14;
 
 /* ===== STATE ===== */
 const miniCandles = {};
-const timeframeCandles = {};
 const lastSignalAt = {};
 const currentSignal = {};
 const candidateCounts = {};
@@ -50,7 +46,7 @@ app.get("/", (req, res) => {
 app.get("/signals", (req, res) => {
   let latest = signalsQueue[0]?.ts || 0;
 
-  let tableRows = signalsQueue.map((sig, i) => {
+  let tableRows = signalsQueue.map((sig) => {
     const highlightClass = sig.ts === latest ? "highlight" : "";
     return `
       <tr class="${highlightClass}">
@@ -115,7 +111,6 @@ app.get("/signals", (req, res) => {
       </audio>
       <script>
         const sound = document.getElementById("alertSound");
-        // play alert if highlighted signal exists
         if (document.querySelector(".highlight")) {
           sound.volume = 0.4;
           sound.play().catch(()=>{});
@@ -161,27 +156,10 @@ function ATR(c) {
   return sum / (c.length - 1);
 }
 
-/* ===== CANDLE MANAGEMENT ===== */
-function updateMiniCandle(symbol, price, ts) {
-  if (!miniCandles[symbol]) miniCandles[symbol] = [];
-  const candles = miniCandles[symbol];
-  const periodTs = Math.floor(ts / MINI_CANDLE_MS) * MINI_CANDLE_MS;
-  const last = candles[candles.length - 1];
-  if (!last || last.ts !== periodTs) {
-    if (last) evaluateConfirmations(symbol);
-    candles.push({ open: price, high: price, low: price, close: price, ts: periodTs });
-    if (candles.length > MAX_HISTORY) candles.shift();
-  } else {
-    last.high = Math.max(last.high, price);
-    last.low = Math.min(last.low, price);
-    last.close = price;
-  }
-}
-
 /* ===== CONFIRMATION LOGIC ===== */
 function evaluateConfirmations(symbol) {
   const candles = miniCandles[symbol];
-  if (!candles || candles.length < EMA_SLOW + 1) return;
+  if (!candles || candles.length < EMA_SLOW + 3) return; // need more data
 
   const closed = candles.slice(0, -1);
   const closes = closed.map(c => c.close);
@@ -189,30 +167,33 @@ function evaluateConfirmations(symbol) {
   const emaSlow = EMA(closes, EMA_SLOW);
   const rsi = RSI(closes);
 
-  const buy = emaFast.at(-1) > emaSlow.at(-1) && rsi > 55;
-  const sell = emaFast.at(-1) < emaSlow.at(-1) && rsi < 45;
+  // Bias check
+  const bias = emaFast.at(-1) > emaSlow.at(-1) && rsi > 55
+    ? "BUY"
+    : emaFast.at(-1) < emaSlow.at(-1) && rsi < 45
+    ? "SELL"
+    : null;
 
   if (!candidateCounts[symbol]) candidateCounts[symbol] = { BUY: 0, SELL: 0 };
-  if (buy && !sell) {
+
+  if (bias === "BUY") {
     candidateCounts[symbol].BUY++;
     candidateCounts[symbol].SELL = 0;
-  } else if (sell && !buy) {
+  } else if (bias === "SELL") {
     candidateCounts[symbol].SELL++;
     candidateCounts[symbol].BUY = 0;
-  } else {
-    candidateCounts[symbol].BUY = candidateCounts[symbol].SELL = 0;
   }
 
   const now = Date.now();
   const cur = currentSignal[symbol];
 
   if (!cur) {
-    if (candidateCounts[symbol].BUY >= CONFIRM_SET) return createSignal(symbol, "BUY", closed);
-    if (candidateCounts[symbol].SELL >= CONFIRM_SET) return createSignal(symbol, "SELL", closed);
+    if (candidateCounts[symbol].BUY >= 3) return createSignal(symbol, "BUY", closed);
+    if (candidateCounts[symbol].SELL >= 3) return createSignal(symbol, "SELL", closed);
   } else {
-    if (cur.action === "BUY" && candidateCounts[symbol].SELL >= CONFIRM_FLIP && now - cur.ts >= MIN_HOLD_MS)
+    if (cur.action === "BUY" && candidateCounts[symbol].SELL >= 3 && now - cur.ts >= MIN_HOLD_MS)
       return createSignal(symbol, "SELL", closed);
-    if (cur.action === "SELL" && candidateCounts[symbol].BUY >= CONFIRM_FLIP && now - cur.ts >= MIN_HOLD_MS)
+    if (cur.action === "SELL" && candidateCounts[symbol].BUY >= 3 && now - cur.ts >= MIN_HOLD_MS)
       return createSignal(symbol, "BUY", closed);
   }
 }
@@ -257,11 +238,25 @@ ws.on("open", () => {
 ws.on("message", (msg) => {
   const data = JSON.parse(msg);
   if (data.authorize) {
-    console.log("✅ Authorized. Subscribing to symbols...");
-    SYMBOLS.forEach(s => ws.send(JSON.stringify({ ticks: s })));
-  } else if (data.tick) {
-    const ts = Date.now();
-    updateMiniCandle(data.tick.symbol, data.tick.quote, ts);
+    console.log("✅ Authorized. Subscribing to candle streams...");
+    SYMBOLS.forEach(s => {
+      ws.send(JSON.stringify({
+        candles: s,
+        subscribe: 1,
+        style: "candles",
+        granularity: CANDLE_INTERVAL
+      }));
+    });
+  } else if (data.candle) {
+    const { open, high, low, close, epoch, symbol } = data.candle;
+    if (!miniCandles[symbol]) miniCandles[symbol] = [];
+    const candles = miniCandles[symbol];
+    const candleObj = { open, high, low, close, ts: epoch * 1000 };
+    candles.push(candleObj);
+    if (candles.length > MAX_HISTORY) candles.shift();
+
+    // Confirm signals on closed candles
+    evaluateConfirmations(symbol);
   }
 });
 
