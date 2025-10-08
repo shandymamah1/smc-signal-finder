@@ -26,7 +26,7 @@ const RSI_PERIOD = 14;
 // ===== STATE =====
 const miniCandles = {};
 const timeframeCandles = {};
-const confirmedSignals = {}; // persistent confirmed signal per symbol
+const confirmedSignals = {};
 const signalsQueue = [];
 
 // ===== UTILITIES =====
@@ -102,16 +102,11 @@ function updateTimeframeCandles(symbol, price, ts) {
 
 // ===== SIGNAL LOGIC =====
 function evaluateSymbol(symbol) {
-  const now = Date.now();
   const mini = miniCandles[symbol];
   const tfs = timeframeCandles[symbol];
-  if (!mini || !tfs) return;
-  if (mini.length < EMA_SLOW) return;
+  if (!mini || !tfs || mini.length < EMA_SLOW) return;
 
   const closesMini = mini.map(c => c.close);
-  const emaFastMini = EMA(closesMini, EMA_FAST);
-  const emaSlowMini = EMA(closesMini, EMA_SLOW);
-  const rsiMini = RSI(closesMini);
   const lastClose = closesMini[closesMini.length - 1];
 
   // Multi-timeframe trend check
@@ -125,33 +120,31 @@ function evaluateSymbol(symbol) {
     const rsi = RSI(closes);
     if (emaFast > emaSlow && rsi > 50) {
       if (trend === null) trend = "BUY";
-      else if (trend !== "BUY") return; // conflicting trend
+      else if (trend !== "BUY") return;
     } else if (emaFast < emaSlow && rsi < 50) {
       if (trend === null) trend = "SELL";
-      else if (trend !== "SELL") return; // conflicting trend
-    } else return; // indecision
+      else if (trend !== "SELL") return;
+    } else return;
   }
 
   if (!trend) return;
 
   // Persist confirmed signal
-  if (confirmedSignals[symbol] && confirmedSignals[symbol].action === trend) return; // already confirmed
+  if (confirmedSignals[symbol] && confirmedSignals[symbol].action === trend) return;
 
   const atr = ATR(mini);
   const sl = trend === "BUY" ? lastClose - atr * 3 : lastClose + atr * 3;
   const tp = trend === "BUY" ? lastClose + atr * 6 : lastClose - atr * 6;
 
-  const sig = { symbol, action: trend, entry: lastClose, sl, tp, atr, ts: now };
+  const sig = { symbol, action: trend, entry: lastClose, sl, tp, atr, ts: Date.now() };
   confirmedSignals[symbol] = sig;
   signalsQueue.unshift(sig);
   if (signalsQueue.length > MAX_HISTORY) signalsQueue.splice(MAX_HISTORY);
 
-  // Sound alert
-  exec("termux-notification -t 'SMC Signal' -c '" + trend + " " + symbol + "'");
-
-  // Terminal output
+  // Terminal output + sound
   console.log(chalk.yellowBright(`\n📢 ${symbol} CONFIRMED ${trend}`));
   console.log(`Entry: ${lastClose.toFixed(3)} | SL: ${sl.toFixed(3)} | TP: ${tp.toFixed(3)} | ATR: ${atr.toFixed(3)}`);
+  exec(`termux-notification -t "SMC Signal" -c "${trend} ${symbol}"`);
 }
 
 // ===== WEBSOCKET =====
@@ -165,7 +158,7 @@ ws.on("open", () => {
 ws.on("message", (msg) => {
   const data = JSON.parse(msg);
   if (data.authorize) {
-    console.log("✅ Authorized. Subscribing to symbols...");
+    console.log("✅ Authorized. Subscribing...");
     SYMBOLS.forEach(s => ws.send(JSON.stringify({ ticks: s })));
     setInterval(() => SYMBOLS.forEach(evaluateSymbol), 500);
   } else if (data.tick) {
@@ -182,7 +175,7 @@ ws.on("close", () => {
   setTimeout(() => ws.terminate(), 5000);
 });
 
-// ===== EXPRESS SERVER (PRETTY HTML) =====
+// ===== EXPRESS SERVER =====
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -190,7 +183,7 @@ app.get("/", (req, res) => {
   res.send(`
     <h2>✅ SMC Ultra Signal Finder Running</h2>
     <p>View live signals below:</p>
-    <a href="/signals" style="font-size: 18px; text-decoration: none;">➡️ Open /signals</a>
+    <a href="/signals" style="font-size:18px;">➡️ Open /signals</a>
   `);
 });
 
@@ -198,7 +191,7 @@ app.get("/signals", (req, res) => {
   let tableRows = signalsQueue.map((sig, idx) => `
     <tr ${idx === 0 ? 'style="background:#fffbcc;"' : ''}>
       <td>${sig.symbol}</td>
-      <td style="color:${sig.action === "BUY" ? "green" : "red"}; font-weight:bold;">
+      <td style="color:${sig.action==="BUY"?"green":"red"}; font-weight:bold;">
         ${sig.action}
       </td>
       <td>${sig.entry.toFixed(3)}</td>
@@ -216,6 +209,39 @@ app.get("/signals", (req, res) => {
       <title>SMC Ultra Signals</title>
       <meta http-equiv="refresh" content="5">
       <style>
-        body { font-family: Arial, sans-serif; background:#f0f2f5; padding:20px; }
+        body { font-family: Arial,sans-serif; background:#f0f2f5; padding:20px; }
         h2 { text-align:center; }
-        table { border-collapse: collapse; width:100%; background:white; box-shadow:0 0
+        table { border-collapse: collapse; width:100%; background:white; box-shadow:0 0 10px rgba(0,0,0,0.1); }
+        th, td { padding:10px; border:1px solid #ddd; text-align:center; }
+        th { background:#007bff; color:white; }
+        tr:first-child { font-weight:bold; }
+      </style>
+    </head>
+    <body>
+      <h2>📊 Live SMC Signals</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Action</th>
+            <th>Entry</th>
+            <th>SL</th>
+            <th>TP</th>
+            <th>ATR</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${tableRows}
+        </tbody>
+      </table>
+      <p style="text-align:center; color:gray; margin-top:10px;">
+        Auto-refreshes every 5s ⏳
+      </p>
+    </body>
+    </html>
+  `);
+});
+
+app.listen(PORT, () => {
+  console.log(`🌐 Express server listening on port ${PORT}`);
+});
