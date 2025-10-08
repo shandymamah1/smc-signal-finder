@@ -3,11 +3,25 @@
  * Fast SMC Volatility Signals with Mini-Candles (10s)
  * + Color-coded terminal + Beep alerts
  * + SL/TP display
+ * + Express server for Render
  */
 
+import express from "express";
 import WebSocket from "ws";
 import readline from "readline";
 import chalk from "chalk";
+
+// ===== EXPRESS SERVER =====
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => {
+  res.send("SMC Signal Finder is running ✅");
+});
+
+app.listen(PORT, () => {
+  console.log(`Express server listening on port ${PORT}`);
+});
 
 // ===== CONFIG =====
 const API_TOKEN = "MrUiWBFYmsfrsjC";
