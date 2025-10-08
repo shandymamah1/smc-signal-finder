@@ -14,15 +14,73 @@ import chalk from "chalk";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Root route
 app.get("/", (req, res) => {
-  res.send("SMC Signal Finder is running ✅");
+  res.send(`
+    <h2>✅ SMC Signal Finder is running</h2>
+    <p>View live signals below:</p>
+    <a href="/signals" style="font-size: 18px; text-decoration: none;">➡️ Open /signals</a>
+  `);
 });
 
-// Returns current signals in JSON
+// Signals route — show pretty HTML table
 app.get("/signals", (req, res) => {
-  res.json(signalsQueue);
+  let tableRows = signalsQueue.map(sig => `
+    <tr>
+      <td>${sig.symbol}</td>
+      <td style="color:${sig.action === "BUY" ? "green" : "red"}; font-weight:bold;">
+        ${sig.action}
+      </td>
+      <td>${sig.entry.toFixed(3)}</td>
+      <td>${sig.sl.toFixed(3)}</td>
+      <td>${sig.tp.toFixed(3)}</td>
+      <td>${sig.atr.toFixed(3)}</td>
+    </tr>
+  `).join("");
+
+  if (!tableRows) {
+    tableRows = `<tr><td colspan="6" style="text-align:center;">No signals yet ⚡</td></tr>`;
+  }
+
+  res.send(`
+    <html>
+    <head>
+      <title>SMC Signal Finder - Live Signals</title>
+      <meta http-equiv="refresh" content="5">
+      <style>
+        body { font-family: Arial, sans-serif; background:#f8f9fa; padding:20px; }
+        h2 { text-align:center; }
+        table { border-collapse: collapse; width:100%; background:white; box-shadow:0 0 10px rgba(0,0,0,0.1); }
+        th, td { padding:10px; border:1px solid #ddd; text-align:center; }
+        th { background:#007bff; color:white; }
+      </style>
+    </head>
+    <body>
+      <h2>📊 Live SMC Signals</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Action</th>
+            <th>Entry</th>
+            <th>Stop Loss</th>
+            <th>Take Profit</th>
+            <th>ATR</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${tableRows}
+        </tbody>
+      </table>
+      <p style="text-align:center; color:gray; font-size:14px; margin-top:10px;">
+        Auto-refreshes every 5 seconds ⏳
+      </p>
+    </body>
+    </html>
+  `);
 });
 
+// Start server
 app.listen(PORT, () => {
   console.log(`🌐 Express server listening on port ${PORT}`);
 });
