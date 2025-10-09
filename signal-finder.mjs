@@ -95,94 +95,43 @@ if (typeof MAX_SIGNALS_STORED === "undefined") global.MAX_SIGNALS_STORED = 5;
 
   res.send(`
     <!doctype html>
-<html>
-<head>
-  <meta charset="utf-8"/>
-  <title>SMC Signal Finder - Live Signals</title>
-  <style>
-    body { font-family: Arial, sans-serif; background:#f8f9fa; padding:20px; }
-    h2 { text-align:center; }
-    table { border-collapse: collapse; width:100%; background:white; box-shadow:0 0 10px rgba(0,0,0,0.1); }
-    th, td { padding:10px; border:1px solid #ddd; text-align:center; }
-    th { background:#007bff; color:white; }
-    tr.highlight { animation: flash 2s ease-in-out; }
-    @keyframes flash {
-      0% { background: #fff7c2; }
-      50% { background: #fff2a8; }
-      100% { background: white; }
-    }
-    .small { font-size:12px; color:#666; text-align:center; margin-top:8px; }
-  </style>
-</head>
-<body>
-  <h2>📊 KeamzFx (Live VIP SMC Signals)</h2>
-
-  <table>
-    <thead>
-      <tr>
-        <th>Symbol</th>
-        <th>Action</th>
-        <th>Confirmations</th>
-        <th>When</th>
-      </tr>
-    </thead>
-    <tbody id="signals-body">
-      <tr><td colspan="4">Loading...</td></tr>
-    </tbody>
-  </table>
-
-  <p class="small">Auto-refreshes every 2s. Keeps last 5 signals.</p>
-
-  <audio id="alertSound">
-    <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
-  </audio>
-
-  <script>
-    const sound = document.getElementById("alertSound");
-
-    async function fetchSignals() {
-      try {
-        const res = await fetch("/signals");
-        const data = await res.json();
-
-        const tableBody = document.querySelector("#signals-body");
-        tableBody.innerHTML = "";
-
-        if (!data || data.length === 0) {
-          tableBody.innerHTML = "<tr><td colspan='4'>No signals yet</td></tr>";
-          return;
+    <html>
+    <head>
+      <meta charset="utf-8"/>
+      <title>SMC Signal Finder - Live Signals</title>
+      <style>
+        body { font-family: Arial, sans-serif; background:#f8f9fa; padding:20px; }
+        h2 { text-align:center; }
+        table { border-collapse: collapse; width:100%; background:white; box-shadow:0 0 10px rgba(0,0,0,0.1); }
+        th, td { padding:10px; border:1px solid #ddd; text-align:center; }
+        th { background:#007bff; color:white; }
+        tr.highlight { animation: flash 2s ease-in-out; }
+        @keyframes flash {
+          0% { background: #fff7c2; }
+          50% { background: #fff2a8; }
+          100% { background: white; }
         }
-
-        const latestTs = data[0]?.ts;
-
-        data.forEach(sig => {
-          const row = document.createElement("tr");
-          if (sig.ts === latestTs) row.classList.add("highlight"); // highlight latest signal
-          row.innerHTML = `
-            <td>${sig.symbol}</td>
-            <td style="color:${sig.action === "BUY" ? "green" : "red"}">${sig.action}</td>
-            <td>${sig.confirmations}</td>
-            <td>${new Date(sig.ts).toLocaleTimeString()}</td>
-          `;
-          tableBody.appendChild(row);
-        });
-
-        // 🔔 Play sound if there’s a highlighted signal
-        if (document.querySelector(".highlight")) {
-          sound.volume = 0.4;
-          sound.play().catch(() => {});
-        }
-      } catch (err) {
-        console.error("Error fetching signals:", err);
-      }
-    }
-
-    // refresh every 2s
-    setInterval(fetchSignals, 2000);
-    fetchSignals();
-  </script>
-</body>
-</html>
+        .small { font-size:12px; color:#666; text-align:center; margin-top:8px; }
+      </style>
+    </head>
+    <body>
+      <h2>📊 KeamzFx (Live VIP SMC Signals)</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Action</th>
+            <th>Confirmations</th>
+            <th>When</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${tableRows}
+        </tbody>
+      </table>
+      <p class="small">Auto-refreshes every 5s. Keeps last ${global.MAX_SIGNALS_STORED} signals.</p>
+    </body>
+    </html>
   `);
 });
 
