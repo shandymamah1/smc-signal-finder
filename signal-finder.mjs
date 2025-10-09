@@ -13,8 +13,12 @@ import readline from "readline";
 import chalk from "chalk";
 
 // ===== INITIALIZATION =====
-if (!Array.isArray(signalsQueue)) signalsQueue = [];
-if (typeof MAX_SIGNALS_STORED === "undefined") global.MAX_SIGNALS_STORED = 5;
+global.signalsQueue = global.signalsQueue || [];
+global.MAX_SIGNALS_STORED = global.MAX_SIGNALS_STORED || 5;
+
+// Local reference for easier use
+const signalsQueue = global.signalsQueue;
+
 // ===== CONFIG =====
 const API_TOKEN = "MrUiWBFYmsfrsjC";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
