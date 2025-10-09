@@ -1,46 +1,64 @@
 #!/usr/bin/env node
 /**
  * signal-finder.mjs
- * Multi-Timeframe (1m + 5m + 15m) Smart Signal Finder (~93–95% accuracy)
+ * Multi-Timeframe (1m + 5m) Smart Signal Finder (~90–92% accuracy)
  */
 
 import express from "express";
 import WebSocket from "ws";
 import chalk from "chalk";
+import readline from "readline";
 
 /* ===== CONFIG ===== */
 const API_TOKEN = "MrUiWBFYmsfrsjC";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
 
-const MAX_HISTORY = 500;
+const MAX_HISTORY = 300;
 const TF_1M = 60_000;
 const TF_5M = 5 * 60_000;
-const TF_15M = 15 * 60_000;
 
 const EMA_FAST = 7;
 const EMA_MID = 14;
 const EMA_SLOW = 25;
 const RSI_PERIOD = 14;
 const MIN_ATR = 0.00005;
-const COOLDOWN_MS = 120_000;
-const MAX_SIGNALS = 30;
+
+const COOLDOWN_MS = 90_000;
+const MAX_SIGNALS = 25;
 
 /* ===== STATE ===== */
-const candles = {}; // { symbol: {1m:[], 5m:[], 15m:[]} }
+const candles = {}; // { symbol: {1m:[], 5m:[]} }
 const lastSignalAt = {};
 const signals = [];
 
-/* ===== EXPRESS DASHBOARD ===== */
+/* ===== EXPRESS SERVER ===== */
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.get("/", (req, res) => {
   res.send(`<h2>✅ Multi-Timeframe Signal Finder is Running</h2>
-  <p>Visit <a href='/signals'>/signals</a> to view live entries.</p>`);
+    <p>Visit <a href='/signals'>/signals</a> to view live entries.</p>`);
 });
 
 app.get("/signals", (req, res) => {
-  const rows = signals.map(sig => `
+  const html = `
+  <html>
+  <head>
+  <meta http-equiv="refresh" content="5" />
+  <title>SMC Signals (1m + 5m)</title>
+  <style>
+    body { font-family: sans-serif; background: #f4f6f8; padding: 20px; }
+    table { width:100%; border-collapse: collapse; background:white; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align:center; }
+    th { background: #007bff; color: white; }
+    tr:nth-child(even) { background:#f9f9f9; }
+  </style>
+  </head>
+  <body>
+  <h2>📊 Live Signals (1m + 5m Confirmed)</h2>
+  <table>
+  <tr><th>Symbol</th><th>Action</th><th>Entry</th><th>SL</th><th>TP</th><th>ATR</th><th>Time</th></tr>
+  ${signals.map(sig => `
     <tr>
       <td>${sig.symbol}</td>
       <td style="color:${sig.action === 'BUY' ? 'green' : 'red'}; font-weight:bold;">${sig.action}</td>
@@ -49,32 +67,14 @@ app.get("/signals", (req, res) => {
       <td>${sig.tp.toFixed(5)}</td>
       <td>${sig.atr.toFixed(5)}</td>
       <td>${new Date(sig.ts).toLocaleTimeString()}</td>
-    </tr>`).join("");
-
-  res.send(`
-  <html>
-  <head>
-  <meta http-equiv="refresh" content="5" />
-  <style>
-  body { font-family:sans-serif; background:#f8f9fa; padding:20px; }
-  h2 { text-align:center; }
-  table { border-collapse: collapse; width:100%; background:white; }
-  th, td { border:1px solid #ddd; padding:10px; text-align:center; }
-  th { background:#007bff; color:white; }
-  </style>
-  </head>
-  <body>
-  <h2>📊 Confirmed Multi-Timeframe Signals (1m + 5m + 15m)</h2>
-  <table>
-  <thead><tr><th>Symbol</th><th>Action</th><th>Entry</th><th>SL</th><th>TP</th><th>ATR</th><th>Time</th></tr></thead>
-  <tbody>${rows || `<tr><td colspan="7">Waiting for signals...</td></tr>`}</tbody>
+    </tr>`).join("")}
   </table>
-  <p style="text-align:center;color:#666;">Auto-refreshes every 5s. Strong triple-timeframe confirmation ✅</p>
   </body>
-  </html>`);
+  </html>`;
+  res.send(html);
 });
 
-app.listen(PORT, () => console.log(`🌍 Dashboard: http://localhost:${PORT}/signals`));
+app.listen(PORT, () => console.log(`🌍 Web interface: http://localhost:${PORT}/signals`));
 
 /* ===== UTILS ===== */
 function EMA(values, period) {
@@ -93,7 +93,8 @@ function RSI(values, period = 14) {
     if (diff > 0) gains += diff; else losses -= diff;
   }
   if (losses === 0) return 100;
-  return 100 - (100 / (1 + gains / losses));
+  const rs = gains / losses;
+  return 100 - (100 / (1 + rs));
 }
 
 function ATR(candles) {
@@ -110,14 +111,13 @@ function ATR(candles) {
   return sum / (candles.length - 1);
 }
 
-/* ===== CANDLE UPDATES ===== */
+/* ===== CANDLE UPDATE ===== */
 function updateCandle(symbol, tf, price, ts) {
-  const tfMs = tf === "1m" ? TF_1M : tf === "5m" ? TF_5M : TF_15M;
-  if (!candles[symbol]) candles[symbol] = { "1m": [], "5m": [], "15m": [] };
+  const frame = tf === "1m" ? TF_1M : TF_5M;
+  if (!candles[symbol]) candles[symbol] = { "1m": [], "5m": [] };
   const arr = candles[symbol][tf];
-  const periodTs = Math.floor(ts / tfMs) * tfMs;
+  const periodTs = Math.floor(ts / frame) * frame;
   const last = arr[arr.length - 1];
-
   if (!last || last.ts !== periodTs) {
     arr.push({ open: price, high: price, low: price, close: price, ts: periodTs });
     if (arr.length > MAX_HISTORY) arr.shift();
@@ -134,50 +134,38 @@ function updateCandle(symbol, tf, price, ts) {
 function checkSignal(symbol) {
   const c1 = candles[symbol]?.["1m"];
   const c5 = candles[symbol]?.["5m"];
-  const c15 = candles[symbol]?.["15m"];
-  if (!c1 || !c5 || !c15) return;
-  if (c1.length < EMA_SLOW + 2 || c5.length < EMA_SLOW + 2 || c15.length < EMA_SLOW + 2) return;
+  if (!c1 || !c5 || c1.length < EMA_SLOW + 2 || c5.length < EMA_SLOW + 2) return;
 
   const closes1 = c1.map(c => c.close);
   const closes5 = c5.map(c => c.close);
-  const closes15 = c15.map(c => c.close);
 
   const emaFast1 = EMA(closes1, EMA_FAST).at(-1);
   const emaMid1 = EMA(closes1, EMA_MID).at(-1);
   const emaSlow1 = EMA(closes1, EMA_SLOW).at(-1);
-
   const emaFast5 = EMA(closes5, EMA_FAST).at(-1);
   const emaMid5 = EMA(closes5, EMA_MID).at(-1);
   const emaSlow5 = EMA(closes5, EMA_SLOW).at(-1);
 
-  const emaFast15 = EMA(closes15, EMA_FAST).at(-1);
-  const emaMid15 = EMA(closes15, EMA_MID).at(-1);
-  const emaSlow15 = EMA(closes15, EMA_SLOW).at(-1);
-
   const rsi1 = RSI(closes1);
   const rsi5 = RSI(closes5);
-  const rsi15 = RSI(closes15);
-
   const atr = ATR(c1.slice(-20));
+
   if (atr < MIN_ATR) return;
 
-  const buyAll = emaFast1 > emaMid1 && emaMid1 > emaSlow1 && rsi1 > 60 &&
-                 emaFast5 > emaMid5 && emaMid5 > emaSlow5 && rsi5 > 55 &&
-                 emaFast15 > emaMid15 && emaMid15 > emaSlow15 && rsi15 > 50;
-
-  const sellAll = emaFast1 < emaMid1 && emaMid1 < emaSlow1 && rsi1 < 40 &&
-                  emaFast5 < emaMid5 && emaMid5 < emaSlow5 && rsi5 < 45 &&
-                  emaFast15 < emaMid15 && emaMid15 < emaSlow15 && rsi15 < 50;
+  const buy1 = emaFast1 > emaMid1 && emaMid1 > emaSlow1 && rsi1 > 60;
+  const sell1 = emaFast1 < emaMid1 && emaMid1 < emaSlow1 && rsi1 < 40;
+  const buy5 = emaFast5 > emaMid5 && emaMid5 > emaSlow5 && rsi5 > 60;
+  const sell5 = emaFast5 < emaMid5 && emaMid5 < emaSlow5 && rsi5 < 40;
 
   const now = Date.now();
   if (now - (lastSignalAt[symbol] || 0) < COOLDOWN_MS) return;
 
   const price = closes1.at(-1);
-  const sl = buyAll ? price - atr * 3 : price + atr * 3;
-  const tp = buyAll ? price + atr * 6 : price - atr * 6;
+  const sl = buy1 && buy5 ? price - atr * 3 : price + atr * 3;
+  const tp = buy1 && buy5 ? price + atr * 6 : price - atr * 6;
 
-  if (buyAll) triggerSignal(symbol, "BUY", price, sl, tp, atr);
-  if (sellAll) triggerSignal(symbol, "SELL", price, sl, tp, atr);
+  if (buy1 && buy5) triggerSignal(symbol, "BUY", price, sl, tp, atr);
+  else if (sell1 && sell5) triggerSignal(symbol, "SELL", price, sl, tp, atr);
 }
 
 /* ===== SIGNAL FIRE ===== */
@@ -188,11 +176,11 @@ function triggerSignal(symbol, action, entry, sl, tp, atr) {
   lastSignalAt[symbol] = Date.now();
 
   console.clear();
-  console.log(chalk.yellow.bold("⚡ Triple-Timeframe Confirmed Signals (1m+5m+15m)\n"));
-  signals.slice(0, 10).forEach((s, i) => {
+  console.log(chalk.blue.bold("📈 1m + 5m Confirmed Signals\n"));
+  for (const s of signals.slice(0, 10)) {
     const col = s.action === "BUY" ? chalk.green : chalk.red;
-    console.log(`${i + 1}. ${col(s.action)} ${s.symbol} | Entry: ${s.entry.toFixed(5)} | SL: ${s.sl.toFixed(5)} | TP: ${s.tp.toFixed(5)} | ATR: ${s.atr.toFixed(5)} | ${new Date(s.ts).toLocaleTimeString()}`);
-  });
+    console.log(`${col(s.action)} ${s.symbol} | Entry: ${s.entry.toFixed(5)} | SL: ${s.sl.toFixed(5)} | TP: ${s.tp.toFixed(5)} | ATR: ${s.atr.toFixed(5)} | ${new Date(s.ts).toLocaleTimeString()}`);
+  }
 }
 
 /* ===== WEBSOCKET ===== */
@@ -214,7 +202,6 @@ ws.on("message", msg => {
     const ts = Date.now();
     updateCandle(symbol, "1m", quote, ts);
     updateCandle(symbol, "5m", quote, ts);
-    updateCandle(symbol, "15m", quote, ts);
   }
 });
 
