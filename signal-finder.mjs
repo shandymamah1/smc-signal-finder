@@ -12,9 +12,9 @@ import WebSocket from "ws";
 import readline from "readline";
 import chalk from "chalk";
 
-// ===== INITIALIZATION =====
 global.signalsQueue = global.signalsQueue || [];
 global.MAX_SIGNALS_STORED = global.MAX_SIGNALS_STORED || 5;
+const signalsQueue = global.signalsQueue;
 
 // ===== CONFIG =====
 const API_TOKEN = "MrUiWBFYmsfrsjC";
@@ -90,59 +90,96 @@ if (typeof MAX_SIGNALS_STORED === "undefined") global.MAX_SIGNALS_STORED = 5;
 
   res.send(`
     <!doctype html>
-    <html>
-    <head>
-      <meta charset="utf-8"/>
-      <meta http-equiv="refresh" content="5" />
-      <title>SMC Signal Finder - Live Signals</title>
-      <style>
-        body { font-family: Arial, sans-serif; background:#f8f9fa; padding:20px; }
-        h2 { text-align:center; }
-        table { border-collapse: collapse; width:100%; background:white; box-shadow:0 0 10px rgba(0,0,0,0.1); }
-        th, td { padding:10px; border:1px solid #ddd; text-align:center; }
-        th { background:#007bff; color:white; }
-        tr.highlight { animation: flash 2s ease-in-out; }
-        @keyframes flash {
-          0% { background: #fff7c2; }
-          50% { background: #fff2a8; }
-          100% { background: white; }
-        }
-        .small { font-size:12px; color:#666; text-align:center; margin-top:8px; }
-      </style>
-    </head>
-    <body>
-      <h2>📊 KeamzFx (Live VIP SMC Signals)</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Symbol</th>
-            <th>Action</th>
-            <th>Entry</th>
-            <th>Stop Loss</th>
-            <th>Take Profit</th>
-            <th>ATR</th>
-            <th>When</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${tableRows}
-        </tbody>
-      </table>
-      <p class="small">Auto-refreshes every 5s. Keeps last ${MAX_SIGNALS_STORED} signals.</p>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>SMC Signal Finder - Live Signals</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#f8f9fa; padding:20px; }
+    h2 { text-align:center; }
+    table { border-collapse: collapse; width:100%; background:white; box-shadow:0 0 10px rgba(0,0,0,0.1); }
+    th, td { padding:10px; border:1px solid #ddd; text-align:center; }
+    th { background:#007bff; color:white; }
+    tr.highlight { animation: flash 2s ease-in-out; }
+    @keyframes flash {
+      0% { background: #fff7c2; }
+      50% { background: #fff2a8; }
+      100% { background: white; }
+    }
+    .small { font-size:12px; color:#666; text-align:center; margin-top:8px; }
+  </style>
+</head>
+<body>
+  <h2>📊 KeamzFx (Live VIP SMC Signals)</h2>
 
-      <audio id="alertSound">
-        <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
-      </audio>
-      <script>
-        const sound = document.getElementById("alertSound");
-        // play alert if highlighted signal exists
+  <table>
+    <thead>
+      <tr>
+        <th>Symbol</th>
+        <th>Action</th>
+        <th>Confirmations</th>
+        <th>When</th>
+      </tr>
+    </thead>
+    <tbody id="signals-body">
+      <tr><td colspan="4">Loading...</td></tr>
+    </tbody>
+  </table>
+
+  <p class="small">Auto-refreshes every 2s. Keeps last 5 signals.</p>
+
+  <audio id="alertSound">
+    <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
+  </audio>
+
+  <!-- ✅ PLACE YOUR SCRIPT HERE -->
+  <script>
+    const sound = document.getElementById("alertSound");
+
+    async function fetchSignals() {
+      try {
+        const res = await fetch("/signals");
+        const data = await res.json();
+
+        const tableBody = document.querySelector("#signals-body");
+        tableBody.innerHTML = "";
+
+        if (!data || data.length === 0) {
+          tableBody.innerHTML = "<tr><td colspan='4'>No signals yet</td></tr>";
+          return;
+        }
+
+        const latestTs = data[0]?.ts;
+
+        data.forEach(sig => {
+          const isLatest = sig.ts === latestTs;
+          const row = document.createElement("tr");
+          if (isLatest) row.classList.add("highlight");
+          row.innerHTML = `
+            <td>${sig.symbol}</td>
+            <td style="color:${sig.action === "BUY" ? "green" : "red"}">${sig.action}</td>
+            <td>${sig.confirmations || "-"}</td>
+            <td>${new Date(sig.ts).toLocaleTimeString()}</td>
+          `;
+          tableBody.appendChild(row);
+        });
+
+        // 🔔 Play sound if there’s a highlighted signal
         if (document.querySelector(".highlight")) {
           sound.volume = 0.4;
-          sound.play().catch(()=>{});
+          sound.play().catch(() => {});
         }
-      </script>
-    </body>
-    </html>
+      } catch (err) {
+        console.error("Error fetching signals:", err);
+      }
+    }
+
+    // refresh every 2s
+    setInterval(fetchSignals, 2000);
+    fetchSignals();
+  </script>
+</body>
+</html>
   `);
 });
 
@@ -357,25 +394,39 @@ ws.on("open", () => {
 });
 
 ws.on("message", (msg) => {
-  try {
-    const data = JSON.parse(msg);
-    if (data.authorize) {
-      console.log("✅ Authorized. Subscribing to symbols...");
-      SYMBOLS.forEach(s => ws.send(JSON.stringify({ ticks: s })));
-      // schedule evaluation loop; keep it light
-      setInterval(() => SYMBOLS.forEach(s => {
-        try { evaluateSymbol(s); } catch (e) { /* swallow per-symbol errors */ }
-      }), 500);
-    } else if (data.tick) {
-      const ts = Date.now();
-      updateMiniCandle(data.tick.symbol, data.tick.quote, ts);
-      updateTimeframeCandle(data.tick.symbol, data.tick.quote, ts);
-    } else if (data.error) {
-      console.log("❌", data.error.message);
+  const data = JSON.parse(msg);
+
+  if (data.authorize) {
+    console.log("✅ Authorized. Subscribing to symbols...");
+    SYMBOLS.forEach(s => ws.send(JSON.stringify({ ticks: s })));
+
+  } else if (data.tick) {
+    const ts = Date.now();
+    const symbol = data.tick.symbol;
+    const price = data.tick.quote;
+
+    // Update your candle data
+    updateMiniCandle(symbol, price, ts);
+
+    // ====== SAMPLE SIGNAL DETECTION ======
+    // (replace this with your actual logic)
+    const signal = detectSignal(symbol, price); // your custom check function
+
+    if (signal) {
+      const newSignal = {
+        symbol: symbol,
+        action: signal.action, // "BUY" or "SELL"
+        confirmations: signal.confirmations || 1,
+        ts: ts,
+      };
+
+      // ✅ ADD THIS HERE
+      signalsQueue.unshift(newSignal);
+      if (signalsQueue.length > global.MAX_SIGNALS_STORED)
+        signalsQueue.pop();
+
+      console.log(`📊 ${symbol}: ${signal.action} signal saved (${signalsQueue.length} total)`);
     }
-  } catch (err) {
-    // ignore JSON parse errors from non-standard messages
-    console.error("Failed to parse ws message:", err);
   }
 });
 
