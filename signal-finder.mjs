@@ -7,6 +7,7 @@
  * - Minor safety: rate-limit signals per symbol (cooldown)
  */
 
+import express from "express";
 import WebSocket from "ws";
 import readline from "readline";
 import chalk from "chalk";
@@ -44,9 +45,98 @@ const crossoverHistory = {}; // track last N cross states per symbol
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 rl.on("line", (line) => {
   const cmd = line.trim().toLowerCase();
-  if (cmd === "list refresh") renderSignals();
+  if (cmd === "list") renderSignals();
   if (cmd === "refresh") signalsQueue.length = 0;
 });
+
+/* ===== EXPRESS ===== */
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => {
+  res.send("KeamzFx Signal Finder is running ✅ <br><br>View live signals here 👉<a href='/signals'>/GO GET SIGNALS</a>");
+});
+
+app.get("/signals", (req, res) => {
+  let latest = signalsQueue[0]?.ts || 0;
+
+  let tableRows = signalsQueue.map((sig, i) => {
+    const highlightClass = sig.ts === latest ? "highlight" : "";
+    return `
+      <tr class="${highlightClass}">
+        <td>${sig.symbol}</td>
+        <td style="color:${sig.action === "BUY" ? "green" : "red"}; font-weight:bold;">${sig.action}</td>
+        <td>${Number(sig.entry).toFixed(5)}</td>
+        <td>${Number(sig.sl).toFixed(5)}</td>
+        <td>${Number(sig.tp).toFixed(5)}</td>
+        <td>${Number(sig.atr).toFixed(5)}</td>
+        <td>${new Date(sig.ts).toLocaleTimeString()}</td>
+      </tr>`;
+  }).join("");
+
+  if (!tableRows) {
+    tableRows = `<tr><td colspan="7" style="text-align:center;">Searching for signals📉📈</td></tr>`;
+  }
+
+  res.send(`
+    <!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8"/>
+      <meta http-equiv="refresh" content="5" />
+      <title>SMC Signal Finder - Live Signals</title>
+      <style>
+        body { font-family: Arial, sans-serif; background:#f8f9fa; padding:20px; }
+        h2 { text-align:center; }
+        table { border-collapse: collapse; width:100%; background:white; box-shadow:0 0 10px rgba(0,0,0,0.1); }
+        th, td { padding:10px; border:1px solid #ddd; text-align:center; }
+        th { background:#007bff; color:white; }
+        tr.highlight { animation: flash 2s ease-in-out; }
+        @keyframes flash {
+          0% { background: #fff7c2; }
+          50% { background: #fff2a8; }
+          100% { background: white; }
+        }
+        .small { font-size:12px; color:#666; text-align:center; margin-top:8px; }
+      </style>
+    </head>
+    <body>
+      <h2>📊 KeamzFx (Live VIP SMC Signals)</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Action</th>
+            <th>Entry</th>
+            <th>Stop Loss</th>
+            <th>Take Profit</th>
+            <th>ATR</th>
+            <th>When</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${tableRows}
+        </tbody>
+      </table>
+      <p class="small">Auto-refreshes every 5s. Keeps last ${MAX_SIGNALS_STORED} signals.</p>
+
+      <audio id="alertSound">
+        <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
+      </audio>
+      <script>
+        const sound = document.getElementById("alertSound");
+        // play alert if highlighted signal exists
+        if (document.querySelector(".highlight")) {
+          sound.volume = 0.4;
+          sound.play().catch(()=>{});
+        }
+      </script>
+    </body>
+    </html>
+  `);
+});
+
+app.listen(PORT, () => console.log(`🌐 Express server on port ${PORT}`));
 
 // ===== UTILITIES =====
 // EMA: standard SMA seed then EMA iteration
