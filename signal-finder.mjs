@@ -152,17 +152,15 @@ if (typeof MAX_SIGNALS_STORED === "undefined") global.MAX_SIGNALS_STORED = 5;
         const latestTs = data[0]?.ts;
 
         data.forEach(sig => {
-          const isLatest = sig.ts === latestTs;
-          const row = document.createElement("tr");
-          if (isLatest) row.classList.add("highlight");
-          row.innerHTML = `
-            <td>${sig.symbol}</td>
-            <td style="color:${sig.action === "BUY" ? "green" : "red"}">${sig.action}</td>
-            <td>${sig.confirmations || "-"}</td>
-            <td>${new Date(sig.ts).toLocaleTimeString()}</td>
-          `;
-          tableBody.appendChild(row);
-        });
+  const row = document.createElement("tr");
+  row.innerHTML = `
+    <td>${sig.symbol}</td>
+    <td style="color:${sig.action === "BUY" ? "green" : "red"}">${sig.action}</td>
+    <td>${sig.confirmations}</td>
+    <td>${new Date(sig.ts).toLocaleTimeString()}</td>
+  `;
+  tableBody.appendChild(row);
+});
 
         // 🔔 Play sound if there’s a highlighted signal
         if (document.querySelector(".highlight")) {
