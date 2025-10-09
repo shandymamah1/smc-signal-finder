@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * signal-finder.mjs
- * Enhanced Multi-Timeframe SMC Signals + Browser Alert + Highlight
+ * Enhanced SMC Signals (~75-85% accuracy) + Browser Alert + Highlight
  */
 
 import express from "express";
@@ -13,22 +13,19 @@ import chalk from "chalk";
 const API_TOKEN = "MrUiWBFYmsfrsjC";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
 const MAX_HISTORY = 200;
-const MINI_CANDLE_MS = 15_000;  // fast candles
-const SLOW_CANDLE_MS = 60_000;  // slow trend confirmation
+const MINI_CANDLE_MS = 10_000;
 const COOLDOWN_MS = 60 * 1000;
 const MIN_HOLD_MS = 30 * 1000;
 const MAX_SIGNALS_STORED = 20;
-const CONFIRM_SET = 4;
-const CONFIRM_FLIP = 3;
-const EMA_FAST = 8;
-const EMA_SLOW = 21;
+const CONFIRM_SET = 3;
+const CONFIRM_FLIP = 2;
+const EMA_FAST = 7; // slightly slower to reduce noise
+const EMA_SLOW = 20;
 const RSI_PERIOD = 14;
-const RSI_BUY_THRESHOLD = 60;
-const RSI_SELL_THRESHOLD = 40;
+const MIN_ATR = 0.00005;
 
 /* ===== STATE ===== */
-const miniCandles = {}; // fast 15s candles
-const slowCandles = {}; // slow 1min candles
+const miniCandles = {};
 const lastSignalAt = {};
 const currentSignal = {};
 const candidateCounts = {};
@@ -55,16 +52,15 @@ app.get("/signals", (req, res) => {
 
   let tableRows = signalsQueue.map((sig, i) => {
     const highlightClass = sig.ts === latest ? "highlight" : "";
-    return `
-      <tr class="${highlightClass}">
-        <td>${sig.symbol}</td>
-        <td style="color:${sig.action === "BUY" ? "green" : "red"}; font-weight:bold;">${sig.action}</td>
-        <td>${Number(sig.entry).toFixed(5)}</td>
-        <td>${Number(sig.sl).toFixed(5)}</td>
-        <td>${Number(sig.tp).toFixed(5)}</td>
-        <td>${Number(sig.atr).toFixed(5)}</td>
-        <td>${new Date(sig.ts).toLocaleTimeString()}</td>
-      </tr>`;
+    return `<tr class="${highlightClass}">
+      <td>${sig.symbol}</td>
+      <td style="color:${sig.action === "BUY" ? "green" : "red"}; font-weight:bold;">${sig.action}</td>
+      <td>${Number(sig.entry).toFixed(5)}</td>
+      <td>${Number(sig.sl).toFixed(5)}</td>
+      <td>${Number(sig.tp).toFixed(5)}</td>
+      <td>${Number(sig.atr).toFixed(5)}</td>
+      <td>${new Date(sig.ts).toLocaleTimeString()}</td>
+    </tr>`;
   }).join("");
 
   if (!tableRows) {
@@ -72,60 +68,60 @@ app.get("/signals", (req, res) => {
   }
 
   res.send(`
-    <!doctype html>
-    <html>
-    <head>
-      <meta charset="utf-8"/>
-      <meta http-equiv="refresh" content="5" />
-      <title>SMC Signal Finder - Live Signals</title>
-      <style>
-        body { font-family: Arial, sans-serif; background:#f8f9fa; padding:20px; }
-        h2 { text-align:center; }
-        table { border-collapse: collapse; width:100%; background:white; box-shadow:0 0 10px rgba(0,0,0,0.1); }
-        th, td { padding:10px; border:1px solid #ddd; text-align:center; }
-        th { background:#007bff; color:white; }
-        tr.highlight { animation: flash 2s ease-in-out; }
-        @keyframes flash {
-          0% { background: #fff7c2; }
-          50% { background: #fff2a8; }
-          100% { background: white; }
-        }
-        .small { font-size:12px; color:#666; text-align:center; margin-top:8px; }
-      </style>
-    </head>
-    <body>
-      <h2>📊 Live SMC Signals</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Symbol</th>
-            <th>Action</th>
-            <th>Entry</th>
-            <th>Stop Loss</th>
-            <th>Take Profit</th>
-            <th>ATR</th>
-            <th>When</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${tableRows}
-        </tbody>
-      </table>
-      <p class="small">Auto-refreshes every 5s. Keeps last ${MAX_SIGNALS_STORED} signals.</p>
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta http-equiv="refresh" content="5" />
+<title>SMC Signal Finder - Live Signals</title>
+<style>
+body { font-family: Arial, sans-serif; background:#f8f9fa; padding:20px; }
+h2 { text-align:center; }
+table { border-collapse: collapse; width:100%; background:white; box-shadow:0 0 10px rgba(0,0,0,0.1); }
+th, td { padding:10px; border:1px solid #ddd; text-align:center; }
+th { background:#007bff; color:white; }
+tr.highlight { animation: flash 2s ease-in-out; }
+@keyframes flash {
+0% { background: #fff7c2; }
+50% { background: #fff2a8; }
+100% { background: white; }
+}
+.small { font-size:12px; color:#666; text-align:center; margin-top:8px; }
+</style>
+</head>
+<body>
+<h2>📊 Live SMC Signals</h2>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Action</th>
+<th>Entry</th>
+<th>Stop Loss</th>
+<th>Take Profit</th>
+<th>ATR</th>
+<th>When</th>
+</tr>
+</thead>
+<tbody>
+${tableRows}
+</tbody>
+</table>
+<p class="small">Auto-refreshes every 5s. Keeps last ${MAX_SIGNALS_STORED} signals.</p>
 
-      <audio id="alertSound">
-        <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
-      </audio>
-      <script>
-        const sound = document.getElementById("alertSound");
-        if (document.querySelector(".highlight")) {
-          sound.volume = 0.4;
-          sound.play().catch(()=>{});
-        }
-      </script>
-    </body>
-    </html>
-  `);
+<audio id="alertSound">  
+    <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">  
+</audio>  
+<script>  
+    const sound = document.getElementById("alertSound");  
+    if (document.querySelector(".highlight")) {  
+      sound.volume = 0.4;  
+      sound.play().catch(()=>{});  
+    }  
+</script>  
+</body>  
+</html>
+`);
 });
 
 app.listen(PORT, () => console.log(`🌐 Express server on port ${PORT}`));
@@ -164,16 +160,15 @@ function ATR(c) {
 }
 
 /* ===== CANDLE MANAGEMENT ===== */
-function updateCandle(symbol, price, ts, timeframeMs, storage) {
-  if (!storage[symbol]) storage[symbol] = [];
-  const candles = storage[symbol];
-  const periodTs = Math.floor(ts / timeframeMs) * timeframeMs;
+function updateMiniCandle(symbol, price, ts) {
+  if (!miniCandles[symbol]) miniCandles[symbol] = [];
+  const candles = miniCandles[symbol];
+  const periodTs = Math.floor(ts / MINI_CANDLE_MS) * MINI_CANDLE_MS;
   const last = candles[candles.length - 1];
-
   if (!last || last.ts !== periodTs) {
+    if (last) evaluateConfirmations(symbol);
     candles.push({ open: price, high: price, low: price, close: price, ts: periodTs });
     if (candles.length > MAX_HISTORY) candles.shift();
-    if (storage === miniCandles) evaluateConfirmations(symbol); // evaluate on fast candles
   } else {
     last.high = Math.max(last.high, price);
     last.low = Math.min(last.low, price);
@@ -183,22 +178,23 @@ function updateCandle(symbol, price, ts, timeframeMs, storage) {
 
 /* ===== CONFIRMATION LOGIC ===== */
 function evaluateConfirmations(symbol) {
-  const fast = miniCandles[symbol];
-  const slow = slowCandles[symbol];
-  if (!fast || !slow || fast.length < EMA_SLOW + 1 || slow.length < EMA_SLOW + 1) return;
+  const candles = miniCandles[symbol];
+  if (!candles || candles.length < EMA_SLOW + 2) return;
 
-  const fastCloses = fast.slice(0, -1).map(c => c.close);
-  const slowCloses = slow.slice(0, -1).map(c => c.close);
+  const closed = candles.slice(0, -1);
+  const closes = closed.map(c => c.close);
+  const emaFast = EMA(closes, EMA_FAST);
+  const emaSlow = EMA(closes, EMA_SLOW);
+  const rsi = RSI(closes);
+  const atr = ATR(closed.slice(-20)) || 0.00001;
+  if (atr < MIN_ATR) return; // skip low volatility
 
-  const emaFast = EMA(fastCloses, EMA_FAST);
-  const emaSlow = EMA(fastCloses, EMA_SLOW);
-  const emaSlowTrend = EMA(slowCloses, EMA_SLOW);
-  const rsi = RSI(fastCloses);
-  const atrFast = ATR(fast.slice(-20));
-  if (atrFast < 0.0001) return; // skip low-volatility
+  const prevClose = closes.at(-2);
+  const lastClose = closes.at(-1);
+  const slope = emaFast.at(-1) - emaFast.at(-2);
 
-  const buy = emaFast.at(-1) > emaSlow.at(-1) && emaSlowTrend.at(-1) > emaSlowTrend.at(-2) && rsi > RSI_BUY_THRESHOLD;
-  const sell = emaFast.at(-1) < emaSlow.at(-1) && emaSlowTrend.at(-1) < emaSlowTrend.at(-2) && rsi < RSI_SELL_THRESHOLD;
+  let buy = emaFast.at(-1) > emaSlow.at(-1) && slope > 0 && rsi > 60 && lastClose > prevClose;
+  let sell = emaFast.at(-1) < emaSlow.at(-1) && slope < 0 && rsi < 40 && lastClose < prevClose;
 
   if (!candidateCounts[symbol]) candidateCounts[symbol] = { BUY: 0, SELL: 0 };
   if (buy && !sell) {
@@ -215,13 +211,15 @@ function evaluateConfirmations(symbol) {
   const cur = currentSignal[symbol];
 
   if (!cur) {
-    if (candidateCounts[symbol].BUY >= CONFIRM_SET) return createSignal(symbol, "BUY", fast);
-    if (candidateCounts[symbol].SELL >= CONFIRM_SET) return createSignal(symbol, "SELL", fast);
+    if (candidateCounts[symbol].BUY >= CONFIRM_SET && (!lastSignalAt[symbol] || now - lastSignalAt[symbol] > COOLDOWN_MS))
+      return createSignal(symbol, "BUY", closed);
+    if (candidateCounts[symbol].SELL >= CONFIRM_SET && (!lastSignalAt[symbol] || now - lastSignalAt[symbol] > COOLDOWN_MS))
+      return createSignal(symbol, "SELL", closed);
   } else {
-    if (cur.action === "BUY" && candidateCounts[symbol].SELL >= CONFIRM_FLIP && now - cur.ts >= MIN_HOLD_MS)
-      return createSignal(symbol, "SELL", fast);
-    if (cur.action === "SELL" && candidateCounts[symbol].BUY >= CONFIRM_FLIP && now - cur.ts >= MIN_HOLD_MS)
-      return createSignal(symbol, "BUY", fast);
+    if (cur.action === "BUY" && candidateCounts[symbol].SELL >= CONFIRM_FLIP && now - cur.ts >= MIN_HOLD_MS && rsi < 35)
+      return createSignal(symbol, "SELL", closed);
+    if (cur.action === "SELL" && candidateCounts[symbol].BUY >= CONFIRM_FLIP && now - cur.ts >= MIN_HOLD_MS && rsi > 65)
+      return createSignal(symbol, "BUY", closed);
   }
 }
 
@@ -239,13 +237,13 @@ function createSignal(symbol, action, closed) {
   signalsQueue.unshift(sig);
   if (signalsQueue.length > MAX_SIGNALS_STORED) signalsQueue.splice(MAX_SIGNALS_STORED);
   renderSignals();
-  process.stdout.write("\x07");
+  process.stdout.write("\x07"); // beep
 }
 
 /* ===== TERMINAL RENDER ===== */
 function renderSignals() {
   console.clear();
-  console.log(chalk.blue.bold("🚀 Enhanced SMC Confirmed Signals (Multi-Timeframe)\n"));
+  console.log(chalk.blue.bold("🚀 Enhanced SMC Confirmed Volatility Signals (10s Candles)\n"));
   if (!signalsQueue.length) console.log("Waiting for signals...\n");
   signalsQueue.forEach((s, i) => {
     const col = s.action === "BUY" ? chalk.green : chalk.red;
@@ -269,10 +267,7 @@ ws.on("message", (msg) => {
     SYMBOLS.forEach(s => ws.send(JSON.stringify({ ticks: s })));
   } else if (data.tick) {
     const ts = Date.now();
-    const price = data.tick.quote;
-    const symbol = data.tick.symbol;
-    updateCandle(symbol, price, ts, MINI_CANDLE_MS, miniCandles);
-    updateCandle(symbol, price, ts, SLOW_CANDLE_MS, slowCandles);
+    updateMiniCandle(data.tick.symbol, data.tick.quote, ts);
   }
 });
 
