@@ -18,14 +18,6 @@ app.get("/", (req, res) => {
   res.send("✅ SMC Signal Finder is live and running perfectly!");
 });
 
-// ... your other logic, WebSocket, signals, etc.
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
-
-
 // ===== CONFIG =====
 const API_TOKEN = "MrUiWBFYmsfrsjC";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
