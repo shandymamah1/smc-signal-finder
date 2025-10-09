@@ -28,6 +28,11 @@ const EMA_SLOW = 15;
 const RSI_PERIOD = 14;
 const ATR_PERIOD = 14;
 
+// signal-finder.mjs
+app.get("/signals", (req, res) => {
+  res.json(signalsQueue); // just send JSON data
+});
+
 // Confirmation & filters
 const CROSS_CONFIRMATION = 2; // crossover must persist for this many mini-candles
 const RSI_BUY_THRESHOLD = 55; // require stronger momentum
@@ -132,7 +137,6 @@ if (typeof MAX_SIGNALS_STORED === "undefined") global.MAX_SIGNALS_STORED = 5;
     <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
   </audio>
 
-  <!-- ✅ PLACE YOUR SCRIPT HERE -->
   <script>
     const sound = document.getElementById("alertSound");
 
@@ -152,15 +156,16 @@ if (typeof MAX_SIGNALS_STORED === "undefined") global.MAX_SIGNALS_STORED = 5;
         const latestTs = data[0]?.ts;
 
         data.forEach(sig => {
-  const row = document.createElement("tr");
-  row.innerHTML = `
-    <td>${sig.symbol}</td>
-    <td style="color:${sig.action === "BUY" ? "green" : "red"}">${sig.action}</td>
-    <td>${sig.confirmations}</td>
-    <td>${new Date(sig.ts).toLocaleTimeString()}</td>
-  `;
-  tableBody.appendChild(row);
-});
+          const row = document.createElement("tr");
+          if (sig.ts === latestTs) row.classList.add("highlight"); // highlight latest signal
+          row.innerHTML = `
+            <td>${sig.symbol}</td>
+            <td style="color:${sig.action === "BUY" ? "green" : "red"}">${sig.action}</td>
+            <td>${sig.confirmations}</td>
+            <td>${new Date(sig.ts).toLocaleTimeString()}</td>
+          `;
+          tableBody.appendChild(row);
+        });
 
         // 🔔 Play sound if there’s a highlighted signal
         if (document.querySelector(".highlight")) {
