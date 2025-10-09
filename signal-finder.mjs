@@ -1,31 +1,38 @@
 #!/usr/bin/env node
 /**
  * 🚀 SMC Volatility Signal Finder
- * Syncs exactly with browser feed (10s mini candles)
- * Shows confirmed BUY/SELL entries with SL & TP
+ * Matches browser signals (10s candles)
  */
 
 import express from "express";
 import WebSocket from "ws";
 import chalk from "chalk";
 
-/* ===== CONFIG ===== */
-const API_TOKEN = "YOUR_DERIV_API_TOKEN"; // <-- put your Deriv API token here
+const API_TOKEN = "MrUiWBFYmsfrsjC"; // ✅ your Deriv token
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
 const SERVER_PORT = 3000;
-const CANDLE_INTERVAL = "10s"; // Match browser’s mini-candle interval
 
-/* ===== GLOBAL STATE ===== */
 let latestCandles = {};
 let signals = [];
 
-/* ===== START EXPRESS SERVER ===== */
 const app = express();
+
 app.get("/", (req, res) => {
   res.send(`
-  <h3>🚀 SMC Volatility Signals (10s Mini-Candles)</h3>
-  <table border="1" cellspacing="0" cellpadding="6">
-  <tr><th>Symbol</th><th>Action</th><th>Entry</th><th>Stop Loss</th><th>Take Profit</th><th>ATR</th><th>When</th></tr>
+  <h3 style="color:#007bff;">🚀 SMC Volatility Signals (10s Mini-Candles)</h3>
+  <table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;width:100%;text-align:center;">
+  <thead style="background-color:#007bff;color:white;">
+    <tr>
+      <th>Symbol</th>
+      <th>Action</th>
+      <th>Entry</th>
+      <th>Stop Loss</th>
+      <th>Take Profit</th>
+      <th>ATR</th>
+      <th>When</th>
+    </tr>
+  </thead>
+  <tbody>
   ${signals
     .slice(-5)
     .reverse()
@@ -33,7 +40,7 @@ app.get("/", (req, res) => {
       (s) => `
       <tr>
         <td>${s.symbol}</td>
-        <td>${s.action}</td>
+        <td style="color:${s.action === "BUY" ? "green" : "red"};">${s.action}</td>
         <td>${s.entry.toFixed(6)}</td>
         <td>${s.stopLoss.toFixed(6)}</td>
         <td>${s.takeProfit.toFixed(6)}</td>
@@ -42,18 +49,17 @@ app.get("/", (req, res) => {
       </tr>`
     )
     .join("")}
+  </tbody>
   </table>
-  <p>Auto-refreshes every 5 seconds. Showing last 5 signals.</p>
-  <script>
-    setTimeout(() => location.reload(), 5000);
-  </script>
+  <p style="text-align:center;">Auto-refreshes every 5 seconds. Showing last 5 signals.</p>
+  <script>setTimeout(()=>location.reload(),5000)</script>
   `);
 });
+
 app.listen(SERVER_PORT, () =>
   console.log(chalk.green(`🌐 Server running at http://localhost:${SERVER_PORT}`))
 );
 
-/* ===== DERIV WEBSOCKET ===== */
 const ws = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
 
 ws.on("open", () => {
@@ -78,17 +84,17 @@ ws.on("message", (msg) => {
   }
 });
 
-/* ===== SUBSCRIBE TO CANDLES ===== */
 function subscribeAll() {
   SYMBOLS.forEach((symbol) => {
     ws.send(
       JSON.stringify({
         ticks_history: symbol,
         style: "candles",
-        granularity: 10, // 10-second candles
+        granularity: 10,
         count: 10,
       })
     );
+
     ws.send(
       JSON.stringify({
         subscribe: 1,
@@ -100,7 +106,6 @@ function subscribeAll() {
   });
 }
 
-/* ===== HANDLE CANDLES ===== */
 function handleCandle(symbol, candles) {
   latestCandles[symbol] = candles.map((c) => ({
     open: parseFloat(c.open),
@@ -133,7 +138,6 @@ function handleLiveCandle(candle) {
   }
 }
 
-/* ===== SIGNAL LOGIC (Simple + Synced) ===== */
 function checkSignal(symbol, candles) {
   if (candles.length < 3) return null;
 
@@ -141,9 +145,7 @@ function checkSignal(symbol, candles) {
   const prev = candles[candles.length - 2];
   const atr = calcATR(candles);
 
-  // Simple bullish/bearish engulfing confirmation
   if (last.close > prev.high) {
-    // BUY signal
     return {
       symbol,
       action: "BUY",
@@ -154,7 +156,6 @@ function checkSignal(symbol, candles) {
       time: new Date().toLocaleTimeString(),
     };
   } else if (last.close < prev.low) {
-    // SELL signal
     return {
       symbol,
       action: "SELL",
@@ -169,7 +170,6 @@ function checkSignal(symbol, candles) {
   return null;
 }
 
-/* ===== ATR CALCULATION ===== */
 function calcATR(candles) {
   let total = 0;
   for (let i = 1; i < candles.length; i++) {
@@ -186,7 +186,6 @@ function calcATR(candles) {
   return total / (candles.length - 1);
 }
 
-/* ===== SHOW SIGNAL ===== */
 function showSignal(sig) {
   const color = sig.action === "BUY" ? chalk.green : chalk.red;
   console.log(
@@ -199,3 +198,6 @@ function showSignal(sig) {
     )
   );
 }
+
+// ✅ keep process alive
+setInterval(() => {}, 1000);
