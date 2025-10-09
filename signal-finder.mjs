@@ -12,6 +12,9 @@ import WebSocket from "ws";
 import readline from "readline";
 import chalk from "chalk";
 
+// ===== INITIALIZATION =====
+if (!Array.isArray(signalsQueue)) signalsQueue = [];
+if (typeof MAX_SIGNALS_STORED === "undefined") global.MAX_SIGNALS_STORED = 5;
 // ===== CONFIG =====
 const API_TOKEN = "MrUiWBFYmsfrsjC";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
@@ -62,7 +65,8 @@ app.get("/", (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.get("/signals", (req, res) => {
-  let latest = signalsQueue[0]?.ts || 0;
+  let signalsQueue = [];
+const MAX_SIGNALS_STORED = 5;
 
   let tableRows = signalsQueue.map((sig, i) => {
     const highlightClass = sig.ts === latest ? "highlight" : "";
