@@ -12,6 +12,9 @@ import WebSocket from "ws";
 import readline from "readline";
 import chalk from "chalk";
 
+// 1️⃣ Initialize app BEFORE using it
+const app = express();
+
 global.signalsQueue = global.signalsQueue || [];
 global.MAX_SIGNALS_STORED = global.MAX_SIGNALS_STORED || 5;
 
