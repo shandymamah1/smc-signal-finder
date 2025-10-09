@@ -1,203 +1,229 @@
 #!/usr/bin/env node
 /**
- * 🚀 SMC Volatility Signal Finder
- * Matches browser signals (10s candles)
+ * Fast SMC Volatility Signals with Mini-Candles (10s)
+ * + Console + Web Dashboard (Blink + Sound)
  */
 
 import express from "express";
+import http from "http";
+import { Server } from "socket.io";
 import WebSocket from "ws";
+import readline from "readline";
 import chalk from "chalk";
 
-const API_TOKEN = "MrUiWBFYmsfrsjC"; // ✅ your Deriv token
+// ===== CONFIG =====
+const API_TOKEN = "MrUiWBFYmsfrsjC";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
-const SERVER_PORT = 3000;
+const MAX_HISTORY = 200;
+const MINI_CANDLE_MS = 10_000;
+const COOLDOWN_MS = 60 * 1000;
 
-let latestCandles = {};
-let signals = [];
+const EMA_FAST = 5;
+const EMA_SLOW = 15;
+const RSI_PERIOD = 14;
 
-const app = express();
+// ===== STATE =====
+const miniCandles = {};
+const timeframeCandles = {};
+const lastSignalAt = {};
+const signalsQueue = [];
 
-app.get("/", (req, res) => {
-  res.send(`
-  <h3 style="color:#007bff;">🚀 SMC Volatility Signals (10s Mini-Candles)</h3>
-  <table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;width:100%;text-align:center;">
-  <thead style="background-color:#007bff;color:white;">
-    <tr>
-      <th>Symbol</th>
-      <th>Action</th>
-      <th>Entry</th>
-      <th>Stop Loss</th>
-      <th>Take Profit</th>
-      <th>ATR</th>
-      <th>When</th>
-    </tr>
-  </thead>
-  <tbody>
-  ${signals
-    .slice(-5)
-    .reverse()
-    .map(
-      (s) => `
-      <tr>
-        <td>${s.symbol}</td>
-        <td style="color:${s.action === "BUY" ? "green" : "red"};">${s.action}</td>
-        <td>${s.entry.toFixed(6)}</td>
-        <td>${s.stopLoss.toFixed(6)}</td>
-        <td>${s.takeProfit.toFixed(6)}</td>
-        <td>${s.atr.toFixed(6)}</td>
-        <td>${s.time}</td>
-      </tr>`
-    )
-    .join("")}
-  </tbody>
-  </table>
-  <p style="text-align:center;">Auto-refreshes every 5 seconds. Showing last 5 signals.</p>
-  <script>setTimeout(()=>location.reload(),5000)</script>
-  `);
+// ===== READLINE =====
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+rl.on("line", (line) => {
+  const cmd = line.trim().toLowerCase();
+  if (cmd === "list") renderSignals();
+  if (cmd === "refresh") signalsQueue.length = 0;
 });
 
-app.listen(SERVER_PORT, () =>
-  console.log(chalk.green(`🌐 Server running at http://localhost:${SERVER_PORT}`))
-);
+// ===== UTILITIES =====
+function EMA(arr, period) {
+  if (arr.length < period) return arr[arr.length - 1] || 0;
+  const k = 2 / (period + 1);
+  let ema = arr[arr.length - period];
+  for (let i = arr.length - period + 1; i < arr.length; i++)
+    ema = arr[i] * k + ema * (1 - k);
+  return ema;
+}
 
-const ws = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
+function RSI(arr, period = RSI_PERIOD) {
+  if (arr.length < period + 1) return 50;
+  let gains = 0, losses = 0;
+  for (let i = arr.length - period + 1; i < arr.length; i++) {
+    const diff = arr[i] - arr[i - 1];
+    if (diff > 0) gains += diff;
+    else losses -= diff;
+  }
+  if (losses === 0) return 100;
+  return 100 - (100 / (1 + gains / losses));
+}
+
+function ATR(c) {
+  if (!c || c.length < 2) return 0;
+  let sum = 0;
+  for (let i = 1; i < c.length; i++) {
+    const tr = Math.max(c[i].high - c[i].low, Math.abs(c[i].high - c[i - 1].close), Math.abs(c[i].low - c[i - 1].close));
+    sum += tr;
+  }
+  return sum / (c.length - 1);
+}
+
+// ===== CANDLE MANAGEMENT =====
+function updateMiniCandle(symbol, price, ts) {
+  if (!miniCandles[symbol]) miniCandles[symbol] = [];
+  const candles = miniCandles[symbol];
+  const periodTs = Math.floor(ts / MINI_CANDLE_MS) * MINI_CANDLE_MS;
+  let last = candles[candles.length - 1];
+
+  if (!last || last.ts !== periodTs) {
+    last = { open: price, high: price, low: price, close: price, ts: periodTs };
+    candles.push(last);
+    if (candles.length > MAX_HISTORY) candles.shift();
+    miniCandles[symbol] = candles;
+  } else {
+    last.high = Math.max(last.high, price);
+    last.low = Math.min(last.low, price);
+    last.close = price;
+  }
+}
+
+function updateTimeframeCandle(symbol, price, ts) {
+  if (!timeframeCandles[symbol]) timeframeCandles[symbol] = [[], []]; // 1m & 5m
+  const tfs = [60_000, 300_000];
+  tfs.forEach((tf, idx) => {
+    const c = timeframeCandles[symbol][idx];
+    const periodTs = Math.floor(ts / tf) * tf;
+    let last = c[c.length - 1];
+    if (!last || last.ts !== periodTs) {
+      last = { open: price, high: price, low: price, close: price, ts: periodTs };
+      c.push(last);
+      if (c.length > MAX_HISTORY) c.shift();
+      timeframeCandles[symbol][idx] = c;
+    } else {
+      last.high = Math.max(last.high, price);
+      last.low = Math.min(last.low, price);
+      last.close = price;
+    }
+  });
+}
+
+// ===== SIGNAL LOGIC =====
+function evaluateSymbol(symbol) {
+  const now = Date.now();
+  const candles = miniCandles[symbol];
+  if (!candles || candles.length < EMA_SLOW) return;
+
+  const closes = candles.map(c => c.close);
+  const emaFast = EMA(closes, EMA_FAST);
+  const emaSlow = EMA(closes, EMA_SLOW);
+  const rsi = RSI(closes);
+  const lastClose = closes[closes.length - 1];
+
+  let action = null;
+  if (emaFast > emaSlow && rsi > 50) action = "BUY";
+  if (emaFast < emaSlow && rsi < 50) action = "SELL";
+
+  if (!action) return;
+  if (lastSignalAt[symbol] && now - lastSignalAt[symbol] < COOLDOWN_MS) return;
+
+  lastSignalAt[symbol] = now;
+
+  const atr = ATR(candles);
+  const sl = action === "BUY" ? lastClose - atr * 3 : lastClose + atr * 3;
+  const tp = action === "BUY" ? lastClose + atr * 6 : lastClose - atr * 6;
+
+  const sig = { symbol, action, entry: lastClose, sl, tp, atr, time: new Date().toLocaleTimeString() };
+  signalsQueue.unshift(sig);
+  if (signalsQueue.length > 5) signalsQueue.splice(5);
+
+  renderSignals();
+  process.stdout.write("\x07"); // beep alert
+
+  io.emit("signal", sig);
+}
+
+function renderSignals() {
+  console.clear();
+  console.log(chalk.blue.bold("🚀 SMC Volatility Signals (Mini-Candles 10s)\n"));
+  if (!signalsQueue.length) console.log("Waiting for signals...\n");
+  signalsQueue.forEach((s, i) => {
+    const color = s.action === "BUY" ? chalk.green : chalk.red;
+    console.log(`${i + 1}. ${color(s.action)} ${s.symbol}`);
+    console.log(`   Entry: ${s.entry.toFixed(5)} | SL: ${s.sl.toFixed(5)} | TP: ${s.tp.toFixed(5)} | ATR: ${s.atr.toFixed(5)}\n`);
+  });
+  console.log(chalk.yellow("Commands: refresh | list"));
+}
+
+// ===== WEBSOCKET =====
+const ws = new WebSocket("wss://ws.binaryws.com/websockets/v3?app_id=1089");
 
 ws.on("open", () => {
-  console.log(chalk.cyan("🔗 Connected. Authorizing..."));
+  console.log("🔗 Connected. Authorizing...");
   ws.send(JSON.stringify({ authorize: API_TOKEN }));
 });
 
 ws.on("message", (msg) => {
   const data = JSON.parse(msg);
-
-  if (data.msg_type === "authorize") {
-    console.log(chalk.green("✅ Authorized."));
-    subscribeAll();
-  }
-
-  if (data.msg_type === "candles") {
-    handleCandle(data.echo_req.ticks_history, data.candles);
-  }
-
-  if (data.msg_type === "ohlc") {
-    handleLiveCandle(data.ohlc);
+  if (data.authorize) {
+    console.log("✅ Authorized. Subscribing to symbols...");
+    SYMBOLS.forEach(s => ws.send(JSON.stringify({ ticks: s })));
+    setInterval(() => SYMBOLS.forEach(evaluateSymbol), 500);
+  } else if (data.tick) {
+    const ts = Date.now();
+    updateMiniCandle(data.tick.symbol, data.tick.quote, ts);
+    updateTimeframeCandle(data.tick.symbol, data.tick.quote, ts);
+  } else if (data.error) {
+    console.log("❌", data.error.message);
   }
 });
 
-function subscribeAll() {
-  SYMBOLS.forEach((symbol) => {
-    ws.send(
-      JSON.stringify({
-        ticks_history: symbol,
-        style: "candles",
-        granularity: 10,
-        count: 10,
-      })
-    );
+// ===== EXPRESS + SOCKET.IO DASHBOARD =====
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
 
-    ws.send(
-      JSON.stringify({
-        subscribe: 1,
-        ticks_history: symbol,
-        style: "candles",
-        granularity: 10,
-      })
-    );
-  });
-}
+app.get("/", (req, res) => {
+  res.send(`
+  <!DOCTYPE html>
+  <html lang="en">
+  <head>
+  <title>SMC Signal Finder</title>
+  <style>
+    body { font-family: Arial; background: #111; color: #eee; text-align:center; }
+    table { width:90%; margin:20px auto; border-collapse:collapse; }
+    th, td { padding:10px; border:1px solid #333; }
+    th { background:#007bff; color:#fff; }
+    .BUY { color:lime; }
+    .SELL { color:red; }
+    .blink { background:yellow; color:#000; animation: blink 1s ease-in-out 2; }
+    @keyframes blink { 0%{opacity:1;} 50%{opacity:0.3;} 100%{opacity:1;} }
+  </style>
+  </head>
+  <body>
+    <h2>🚀 SMC Volatility Signals (Mini-Candles 10s)</h2>
+    <table id="sigTable">
+      <thead><tr><th>Symbol</th><th>Action</th><th>Entry</th><th>SL</th><th>TP</th><th>ATR</th><th>Time</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <audio id="buySound" src="https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg"></audio>
+    <audio id="sellSound" src="https://actions.google.com/sounds/v1/cartoon/concussive_hit_guitar_boing.ogg"></audio>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script>
+      const socket = io();
+      const tbody = document.querySelector("#sigTable tbody");
+      socket.on("signal", sig => {
+        const row = document.createElement("tr");
+        row.innerHTML = \`<td>\${sig.symbol}</td><td class="\${sig.action}">\${sig.action}</td>
+        <td>\${sig.entry.toFixed(5)}</td><td>\${sig.sl.toFixed(5)}</td><td>\${sig.tp.toFixed(5)}</td><td>\${sig.atr.toFixed(5)}</td><td>\${sig.time}</td>\`;
+        row.classList.add("blink");
+        tbody.prepend(row);
+        while(tbody.children.length>5) tbody.removeChild(tbody.lastChild);
+        document.getElementById(sig.action === "BUY" ? "buySound" : "sellSound").play();
+      });
+    </script>
+  </body>
+  </html>
+  `);
+});
 
-function handleCandle(symbol, candles) {
-  latestCandles[symbol] = candles.map((c) => ({
-    open: parseFloat(c.open),
-    high: parseFloat(c.high),
-    low: parseFloat(c.low),
-    close: parseFloat(c.close),
-  }));
-}
-
-function handleLiveCandle(candle) {
-  const symbol = candle.symbol;
-  if (!latestCandles[symbol]) return;
-
-  const newCandle = {
-    open: parseFloat(candle.open),
-    high: parseFloat(candle.high),
-    low: parseFloat(candle.low),
-    close: parseFloat(candle.close),
-  };
-
-  const candles = latestCandles[symbol];
-  if (candles.length >= 10) candles.shift();
-  candles.push(newCandle);
-  latestCandles[symbol] = candles;
-
-  const signal = checkSignal(symbol, candles);
-  if (signal) {
-    signals.push(signal);
-    showSignal(signal);
-  }
-}
-
-function checkSignal(symbol, candles) {
-  if (candles.length < 3) return null;
-
-  const last = candles[candles.length - 1];
-  const prev = candles[candles.length - 2];
-  const atr = calcATR(candles);
-
-  if (last.close > prev.high) {
-    return {
-      symbol,
-      action: "BUY",
-      entry: last.close,
-      stopLoss: last.close - atr * 3,
-      takeProfit: last.close + atr * 3,
-      atr,
-      time: new Date().toLocaleTimeString(),
-    };
-  } else if (last.close < prev.low) {
-    return {
-      symbol,
-      action: "SELL",
-      entry: last.close,
-      stopLoss: last.close + atr * 3,
-      takeProfit: last.close - atr * 3,
-      atr,
-      time: new Date().toLocaleTimeString(),
-    };
-  }
-
-  return null;
-}
-
-function calcATR(candles) {
-  let total = 0;
-  for (let i = 1; i < candles.length; i++) {
-    const high = candles[i].high;
-    const low = candles[i].low;
-    const prevClose = candles[i - 1].close;
-    const tr = Math.max(
-      high - low,
-      Math.abs(high - prevClose),
-      Math.abs(low - prevClose)
-    );
-    total += tr;
-  }
-  return total / (candles.length - 1);
-}
-
-function showSignal(sig) {
-  const color = sig.action === "BUY" ? chalk.green : chalk.red;
-  console.log(
-    color(
-      `[${sig.time}] ${sig.symbol} ${sig.action} @ ${sig.entry.toFixed(
-        5
-      )} | SL: ${sig.stopLoss.toFixed(5)} | TP: ${sig.takeProfit.toFixed(5)} | ATR: ${sig.atr.toFixed(
-        5
-      )}`
-    )
-  );
-}
-
-// ✅ keep process alive
-setInterval(() => {}, 1000);
+server.listen(3000, () => console.log("🌐 Dashboard running at http://localhost:3000"));
