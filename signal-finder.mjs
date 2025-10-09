@@ -65,8 +65,9 @@ app.get("/", (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.get("/signals", (req, res) => {
-  let signalsQueue = [];
-const MAX_SIGNALS_STORED = 5;
+  let signalsQueue;
+if (!Array.isArray(signalsQueue)) signalsQueue = [];
+if (typeof MAX_SIGNALS_STORED === "undefined") global.MAX_SIGNALS_STORED = 5;
 
   let tableRows = signalsQueue.map((sig, i) => {
     const highlightClass = sig.ts === latest ? "highlight" : "";
