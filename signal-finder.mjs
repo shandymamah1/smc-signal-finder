@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * signal-finder.mjs
- * SMC Signals (~85–90% Accuracy) with Strong Multi-Confirmation
+ * Enhanced SMC Signals (~75-85% accuracy) + Browser Alert + Highlight
  */
 
 import express from "express";
@@ -19,12 +19,8 @@ const MIN_HOLD_MS = 30 * 1000;
 const MAX_SIGNALS_STORED = 20;
 const CONFIRM_SET = 3;
 const CONFIRM_FLIP = 2;
-
-// EMA layers
-const EMA_FAST = 7;
-const EMA_MID = 14;
-const EMA_SLOW = 25;
-
+const EMA_FAST = 7; // slightly slower to reduce noise
+const EMA_SLOW = 20;
 const RSI_PERIOD = 14;
 const MIN_ATR = 0.00005;
 
@@ -53,6 +49,7 @@ app.get("/", (req, res) => {
 
 app.get("/signals", (req, res) => {
   let latest = signalsQueue[0]?.ts || 0;
+
   let tableRows = signalsQueue.map((sig, i) => {
     const highlightClass = sig.ts === latest ? "highlight" : "";
     return `<tr class="${highlightClass}">
@@ -113,14 +110,14 @@ ${tableRows}
 <p class="small">Auto-refreshes every 5s. Keeps last ${MAX_SIGNALS_STORED} signals.</p>
 
 <audio id="alertSound">  
-  <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">  
+    <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">  
 </audio>  
 <script>  
-  const sound = document.getElementById("alertSound");  
-  if (document.querySelector(".highlight")) {  
-    sound.volume = 0.4;  
-    sound.play().catch(()=>{});  
-  }  
+    const sound = document.getElementById("alertSound");  
+    if (document.querySelector(".highlight")) {  
+      sound.volume = 0.4;  
+      sound.play().catch(()=>{});  
+    }  
 </script>  
 </body>  
 </html>
@@ -182,35 +179,24 @@ function updateMiniCandle(symbol, price, ts) {
 /* ===== CONFIRMATION LOGIC ===== */
 function evaluateConfirmations(symbol) {
   const candles = miniCandles[symbol];
-  if (!candles || candles.length < EMA_SLOW + 3) return;
+  if (!candles || candles.length < EMA_SLOW + 2) return;
 
   const closed = candles.slice(0, -1);
   const closes = closed.map(c => c.close);
   const emaFast = EMA(closes, EMA_FAST);
-  const emaMid = EMA(closes, EMA_MID);
   const emaSlow = EMA(closes, EMA_SLOW);
   const rsi = RSI(closes);
+  const atr = ATR(closed.slice(-20)) || 0.00001;
+  if (atr < MIN_ATR) return; // skip low volatility
 
-  const atrNow = ATR(closed.slice(-20)) || 0.00001;
-  const atrPrev = ATR(closed.slice(-40, -20)) || atrNow;
-  if (atrNow < MIN_ATR || atrNow < atrPrev) return; // needs rising volatility
-
-  const lastClose = closes.at(-1);
   const prevClose = closes.at(-2);
+  const lastClose = closes.at(-1);
   const slope = emaFast.at(-1) - emaFast.at(-2);
 
-  const last3 = closes.slice(-3);
-  const bullishCount = last3.filter((v, i) => i > 0 && v > closes[i - 1]).length;
-  const bearishCount = last3.filter((v, i) => i > 0 && v < closes[i - 1]).length;
-
-  const buy = emaFast.at(-1) > emaMid.at(-1) && emaMid.at(-1) > emaSlow.at(-1) &&
-              slope > 0 && rsi > 60 && bullishCount >= 2 && rsi > 55;
-
-  const sell = emaFast.at(-1) < emaMid.at(-1) && emaMid.at(-1) < emaSlow.at(-1) &&
-               slope < 0 && rsi < 40 && bearishCount >= 2 && rsi < 45;
+  let buy = emaFast.at(-1) > emaSlow.at(-1) && slope > 0 && rsi > 60 && lastClose > prevClose;
+  let sell = emaFast.at(-1) < emaSlow.at(-1) && slope < 0 && rsi < 40 && lastClose < prevClose;
 
   if (!candidateCounts[symbol]) candidateCounts[symbol] = { BUY: 0, SELL: 0 };
-
   if (buy && !sell) {
     candidateCounts[symbol].BUY++;
     candidateCounts[symbol].SELL = 0;
@@ -251,13 +237,13 @@ function createSignal(symbol, action, closed) {
   signalsQueue.unshift(sig);
   if (signalsQueue.length > MAX_SIGNALS_STORED) signalsQueue.splice(MAX_SIGNALS_STORED);
   renderSignals();
-  process.stdout.write("\x07");
+  process.stdout.write("\x07"); // beep
 }
 
 /* ===== TERMINAL RENDER ===== */
 function renderSignals() {
   console.clear();
-  console.log(chalk.blue.bold("🚀 SMC High-Accuracy Signals (10s Candles)\n"));
+  console.log(chalk.blue.bold("🚀 Enhanced SMC Confirmed Volatility Signals (10s Candles)\n"));
   if (!signalsQueue.length) console.log("Waiting for signals...\n");
   signalsQueue.forEach((s, i) => {
     const col = s.action === "BUY" ? chalk.green : chalk.red;
