@@ -14,7 +14,7 @@ import chalk from "chalk";
 
 global.signalsQueue = global.signalsQueue || [];
 global.MAX_SIGNALS_STORED = global.MAX_SIGNALS_STORED || 5;
-const signalsQueue = global.signalsQueue;
+
 
 // ===== CONFIG =====
 const API_TOKEN = "MrUiWBFYmsfrsjC";
