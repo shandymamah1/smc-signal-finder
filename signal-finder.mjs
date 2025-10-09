@@ -12,12 +12,6 @@ import WebSocket from "ws";
 import readline from "readline";
 import chalk from "chalk";
 
-
-// ✅ Add this route
-app.get("/", (req, res) => {
-  res.send("✅ SMC Signal Finder is live and running perfectly!");
-});
-
 // ===== CONFIG =====
 const API_TOKEN = "MrUiWBFYmsfrsjC";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
@@ -57,11 +51,16 @@ rl.on("line", (line) => {
 
 /* ===== EXPRESS ===== */
 const app = express();
-const PORT = process.env.PORT || 3000;
 
+// ✅ your new route
 app.get("/", (req, res) => {
-  res.send("KeamzFx Signal Finder is running ✅ <br><br>View live signals here 👉<a href='/signals'>/GO GET SIGNALS</a>");
+  res.send("✅ SMC Signal Finder is live and running perfectly!");
 });
+
+// ✅ the rest of your logic here (signals, sockets, etc.)
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 
 app.get("/signals", (req, res) => {
   let latest = signalsQueue[0]?.ts || 0;
