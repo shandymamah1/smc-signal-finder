@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: smc-signal-finder
+    env: node
+    plan: free
+    buildCommand: "npm install"
+    startCommand: "node signal-finder.mjs"
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: API_TOKEN
+        value: MrUiWBFYmsfrsjC
+    autoDeploy: true
