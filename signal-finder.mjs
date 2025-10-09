@@ -12,7 +12,6 @@ import WebSocket from "ws";
 import readline from "readline";
 import chalk from "chalk";
 
-const app = express();
 
 // ✅ Add this route
 app.get("/", (req, res) => {
