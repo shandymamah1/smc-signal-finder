@@ -60,7 +60,6 @@ app.get("/", (req, res) => {
 // ✅ the rest of your logic here (signals, sockets, etc.)
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 
 app.get("/signals", (req, res) => {
   let latest = signalsQueue[0]?.ts || 0;
