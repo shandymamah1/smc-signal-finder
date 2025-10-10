@@ -19,6 +19,8 @@ const MAX_HISTORY = 400; // keep more history for indicators
 const MINI_CANDLE_MS = 10_000;
 const COOLDOWN_MS = 60 * 1000;
 
+const MAX_SIGNALS_STORED = 10; // number of signals to keep in memory
+
 const EMA_FAST = 5;
 const EMA_SLOW = 15;
 const RSI_PERIOD = 14;
