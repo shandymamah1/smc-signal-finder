@@ -31,6 +31,10 @@ const appFB = initializeApp(firebaseConfig);
 const db = getDatabase(appFB);
 
 // ===== CONFIG =====
+const API_TOKEN = "MrUiWBFYmsfrsjC";  // ← your Binary.com API token
+const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];  // symbols to monitor
+const MINI_CANDLE_MS = 10_000;  // 10s mini-candles
+const MAX_HISTORY = 500;        // max candles stored
 const EMA_FAST = 8;
 const EMA_SLOW = 30;
 const RSI_PERIOD = 14;
