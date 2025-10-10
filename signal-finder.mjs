@@ -15,191 +15,30 @@ import { onValue } from "firebase/database";
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, push } from "firebase/database";
 
-const firebaseConfig = {
-  apiKey: "AIzaSyAMCVlEPPKA8hSNFF4ruBTayTV_deWsXXw",
-  authDomain: "pularix-88abb.firebaseapp.com",
-  databaseURL: "https://pularix-88abb-default-rtdb.firebaseio.com",
-  projectId: "pularix-88abb",
-  storageBucket: "pularix-88abb.firebasestorage.app",
-  messagingSenderId: "877314756477",
-  appId: "1:877314756477:web:a925edffd31eea18d7c614",
-  measurementId: "G-WYLDRHKV86"
-};
-
-// Initialize Firebase
-const appFB = initializeApp(firebaseConfig);
-const db = getDatabase(appFB);
-
 // ===== CONFIG =====
-const API_TOKEN = "MrUiWBFYmsfrsjC";  // ← your Binary.com API token
-const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];  // symbols to monitor
-const MINI_CANDLE_MS = 10_000;  // 10s mini-candles
-const MAX_HISTORY = 500;        // max candles stored
-const EMA_FAST = 8;
-const EMA_SLOW = 30;
+const API_TOKEN = "MrUiWBFYmsfrsjC";
+const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
+const MAX_HISTORY = 400; // keep more history for indicators
+const MINI_CANDLE_MS = 10_000;
+const COOLDOWN_MS = 60 * 1000;
+
+const MAX_SIGNALS_STORED = 10; // number of signals to keep in memory
+
+const EMA_FAST = 5;
+const EMA_SLOW = 15;
 const RSI_PERIOD = 14;
 const ATR_PERIOD = 14;
 
-const CROSS_CONFIRMATION = 3; // require 3 mini-candles with same crossover
-const RSI_BUY_THRESHOLD = 60; // stronger momentum required
-const RSI_SELL_THRESHOLD = 40;
-const MIN_ATR = 0.00001;
+// Confirmation & filters
+const CROSS_CONFIRMATION = 2; // crossover must persist for this many mini-candles
+const RSI_BUY_THRESHOLD = 55; // require stronger momentum
+const RSI_SELL_THRESHOLD = 45;
+const MIN_ATR = 0.00001; // avoid tiny ATR causing tiny SL/TP (tune for instrument)
 
-const SL_ATR_MULT = 4;
-const TP_ATR_MULT = 10;
+// Wider SL/TP multipliers per your request
+const SL_ATR_MULT = 4;   // stop loss = entry +/- ATR * 4
+const TP_ATR_MULT = 10;  // take profit = entry +/- ATR * 10
 
-const COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes cooldown (was 60s)
-const MAX_SIGNALS_STORED = 10;
-
-const MIN_DIFF_RATIO = 0.00025; // minimum relative difference between EMAs (hysteresis)
-const CONFIRMATIONS_TO_FLIP = 2; // number of confirmed signals required to flip existing action
-const MIN_ATR_MOVE_MULT = 0.5; // require at least ATR * this multiplier movement in last N bars to allow signal
-
-// ===== STATE EXTENSIONS =====
-const lastAction = {};    // last action emitted per symbol: "BUY"/"SELL"/null
-const flipCounter = {};   // counts consecutive confirmations for a different direction
-
-// ===== helper: smooth RSI (avg of last few RSI values) =====
-function smoothRSIFromCloses(closes, period = RSI_PERIOD, smooth = 3) {
-  const rsis = [];
-  // compute RSI for last `smooth` windows or fewer if not enough data
-  for (let i = Math.max(period, closes.length - (period + smooth - 1)); i <= closes.length - 1; i++) {
-    const slice = closes.slice(0, i + 1);
-    if (slice.length >= period + 1) rsis.push(RSI(slice, period));
-  }
-  if (!rsis.length) return RSI(closes, period);
-  return rsis.reduce((a, b) => a + b, 0) / rsis.length;
-}
-
-// ===== updated crossover history recording with magnitude =====
-function recordCrossover(symbol, direction, gapRatio = 0) {
-  // direction: 1 fast>slow, -1 fast<slow, 0 neutral ; gapRatio = relative gap between EMAs
-  if (!crossoverHistory[symbol]) crossoverHistory[symbol] = [];
-  const hist = crossoverHistory[symbol];
-  hist.push({ dir: direction, ts: Date.now(), gap: gapRatio });
-  // keep only a small window
-  if (hist.length > CROSS_CONFIRMATION + 4) hist.shift();
-  crossoverHistory[symbol] = hist;
-}
-
-function crossoverConfirmedAndLargeEnough(symbol, requiredDir) {
-  const hist = crossoverHistory[symbol] || [];
-  if (hist.length < CROSS_CONFIRMATION) return false;
-  // check last CROSS_CONFIRMATION entries are requiredDir and gap >= MIN_DIFF_RATIO
-  for (let i = hist.length - CROSS_CONFIRMATION; i < hist.length; i++) {
-    if (hist[i].dir !== requiredDir) return false;
-    if ((hist[i].gap || 0) < MIN_DIFF_RATIO) return false;
-  }
-  return true;
-}
-
-// ===== additional momentum check on 1m (require price to be on correct side of 1m EMA and showing momentum) =====
-function oneMinuteTrendAllows(symbol, requiredDir) {
-  const tf1 = timeframeCandles[symbol] && timeframeCandles[symbol][0];
-  if (!tf1 || tf1.length < EMA_SLOW) return true; // allow if not enough data
-  const tfCloses = tf1.map(c => c.close);
-  const tfEmaSlow = EMA(tfCloses, EMA_SLOW);
-  const last = tfCloses[tfCloses.length - 1];
-  // require last close relative to slow EMA consistent with direction
-  if (requiredDir === 1 && last < tfEmaSlow) return false;
-  if (requiredDir === -1 && last > tfEmaSlow) return false;
-  // also require recent momentum on 1m: last close must be stronger than previous by small amount
-  const prev = tfCloses[tfCloses.length - 2] || last;
-  const momentum = Math.abs(last - prev) / last;
-  // allow small momentum but prefer a minimum movement
-  return momentum >= 0 || true; // keep permissive but available for extension
-}
-
-// ===== evaluateSymbol (modified) =====
-function evaluateSymbol(symbol) {
-  if (!symbol) return;
-  const now = Date.now();
-  const candles = miniCandles[symbol];
-  if (!candles || candles.length < EMA_SLOW + 4) return;
-
-  const closes = candles.map(c => c.close);
-  const emaFast = EMA(closes, EMA_FAST);
-  const emaSlow = EMA(closes, EMA_SLOW);
-  const lastClose = closes[closes.length - 1];
-
-  // relative gap ratio between EMAs (hysteresis)
-  const gapRatio = Math.abs(emaFast - emaSlow) / Math.max(lastClose, 1e-12);
-
-  // record crossover dir with gap
-  const dir = emaFast > emaSlow ? 1 : (emaFast < emaSlow ? -1 : 0);
-  recordCrossover(symbol, dir, gapRatio);
-
-  // smoothed RSI
-  const rsi = smoothRSIFromCloses(closes, RSI_PERIOD, 3);
-
-  // trend filter using 1m timeframe
-  const trendOK = oneMinuteTrendAllows(symbol, dir);
-
-  // compute ATR and safety checks
-  const atr = Math.max(ATR(candles, ATR_PERIOD) || 0, MIN_ATR);
-  // require recent price movement at least a fraction of ATR to avoid noisy markets
-  const recentMove = Math.abs(lastClose - closes[Math.max(0, closes.length - 3)]) || 0;
-  if (recentMove < atr * MIN_ATR_MOVE_MULT) {
-    // not enough movement recently, skip
-    return;
-  }
-
-  let action = null;
-  if (dir === 1 && rsi >= RSI_BUY_THRESHOLD && trendOK && crossoverConfirmedAndLargeEnough(symbol, 1)) action = "BUY";
-  if (dir === -1 && rsi <= RSI_SELL_THRESHOLD && trendOK && crossoverConfirmedAndLargeEnough(symbol, -1)) action = "SELL";
-
-  if (!action) {
-    // reset flip counter if no confirmed action
-    flipCounter[symbol] = 0;
-    return;
-  }
-
-  // flip debounce logic: if same action as lastAction => immediate allowed (subject to cooldown)
-  // if different, require CONFIRMATIONS_TO_FLIP consecutive confirmations before actually flipping to reduce chattering
-  const prev = lastAction[symbol] || null;
-  if (prev && prev !== action) {
-    flipCounter[symbol] = (flipCounter[symbol] || 0) + 1;
-    if (flipCounter[symbol] < CONFIRMATIONS_TO_FLIP) {
-      return; // wait for additional confirms
-    }
-    // enough confirmations to flip, proceed to signal and reset counter
-    flipCounter[symbol] = 0;
-  }
-
-  // cooldown check
-  if (lastSignalAt[symbol] && now - lastSignalAt[symbol] < COOLDOWN_MS) return;
-
-  // compute SL/TP using safe ATR
-  const safeAtr = Math.max(atr, MIN_ATR);
-  const sl = action === "BUY" ? lastClose - safeAtr * SL_ATR_MULT : lastClose + safeAtr * SL_ATR_MULT;
-  const tp = action === "BUY" ? lastClose + safeAtr * TP_ATR_MULT : lastClose - safeAtr * TP_ATR_MULT;
-
-  lastSignalAt[symbol] = now;
-  lastAction[symbol] = action;
-
-  const sig = {
-    symbol,
-    action,
-    entry: lastClose,
-    sl,
-    tp,
-    atr: safeAtr,
-    ts: now
-  };
-
-  try {
-    push(ref(db, "signals/"), sig);
-  } catch (err) {
-    // if DB push fails, still add locally
-  }
-
-  // push newest at front, trim
-  signalsQueue.unshift(sig);
-  if (signalsQueue.length > MAX_SIGNALS_STORED) signalsQueue.splice(MAX_SIGNALS_STORED);
-
-  renderSignals();
-  process.stdout.write("\x07"); // beep alert
-}
 // ===== STATE =====
 const miniCandles = {};
 const timeframeCandles = {}; // [symbol] = [1mArray, 5mArray]
@@ -415,6 +254,106 @@ function updateTimeframeCandle(symbol, price, ts) {
       last.close = price;
     }
   });
+}
+
+// ===== SIGNAL LOGIC =====
+function recordCrossover(symbol, direction) {
+  // direction: 1 = fast>slow, -1 = fast<slow, 0 = neutral
+  if (!crossoverHistory[symbol]) crossoverHistory[symbol] = [];
+  const hist = crossoverHistory[symbol];
+  hist.push({ dir: direction, ts: Date.now() });
+  if (hist.length > CROSS_CONFIRMATION + 2) hist.shift(); // keep small window
+  crossoverHistory[symbol] = hist;
+}
+
+function crossoverConfirmed(symbol, requiredDir) {
+  const hist = crossoverHistory[symbol] || [];
+  if (hist.length < CROSS_CONFIRMATION) return false;
+  // check the last CROSS_CONFIRMATION entries are requiredDir
+  for (let i = hist.length - CROSS_CONFIRMATION; i < hist.length; i++) {
+    if (hist[i].dir !== requiredDir) return false;
+  }
+  return true;
+}
+
+function evaluateSymbol(symbol) {
+  if (!symbol) return;
+  const now = Date.now();
+  const candles = miniCandles[symbol];
+  if (!candles || candles.length < EMA_SLOW + 2) return;
+
+  const closes = candles.map(c => c.close);
+  const emaFast = EMA(closes, EMA_FAST);
+  const emaSlow = EMA(closes, EMA_SLOW);
+  const rsi = RSI(closes);
+  const lastClose = closes[closes.length - 1];
+
+  // record crossover direction for confirmation
+  const dir = emaFast > emaSlow ? 1 : (emaFast < emaSlow ? -1 : 0);
+  recordCrossover(symbol, dir);
+
+  // basic trend filter using 1m timeframe (use slow EMA on 1m closes if available)
+  let trendOK = true;
+  const tf1 = timeframeCandles[symbol] && timeframeCandles[symbol][0];
+  if (tf1 && tf1.length >= EMA_SLOW) {
+    const tfCloses = tf1.map(c => c.close);
+    const tfEmaSlow = EMA(tfCloses, EMA_SLOW);
+    // if emaSlow on 1m indicates opposite to signal direction, block
+    if (dir === 1 && tfCloses[tfCloses.length - 1] < tfEmaSlow) trendOK = false; // buy but 1m downtrend
+    if (dir === -1 && tfCloses[tfCloses.length - 1] > tfEmaSlow) trendOK = false; // sell but 1m uptrend
+  }
+
+  let action = null;
+  if (dir === 1 && rsi >= RSI_BUY_THRESHOLD && trendOK && crossoverConfirmed(symbol, 1)) action = "BUY";
+  if (dir === -1 && rsi <= RSI_SELL_THRESHOLD && trendOK && crossoverConfirmed(symbol, -1)) action = "SELL";
+
+  if (!action) return;
+  if (lastSignalAt[symbol] && now - lastSignalAt[symbol] < COOLDOWN_MS) return;
+
+  // compute ATR from mini-candles (use ATR_PERIOD)
+  const atr = ATR(candles, ATR_PERIOD) || MIN_ATR;
+  // ensure atr isn't too small
+  const safeAtr = Math.max(atr, MIN_ATR);
+
+  const sl = action === "BUY" ? lastClose - safeAtr * SL_ATR_MULT : lastClose + safeAtr * SL_ATR_MULT;
+  const tp = action === "BUY" ? lastClose + safeAtr * TP_ATR_MULT : lastClose - safeAtr * TP_ATR_MULT;
+
+  lastSignalAt[symbol] = now;
+
+  const sig = {
+    symbol,
+    action,
+    entry: lastClose,
+    sl,
+    tp,
+    atr: safeAtr,
+    ts: now
+  };
+
+push(ref(db, "signals/"), sig);
+
+  // push newest at front, trim
+  signalsQueue.unshift(sig);
+  if (signalsQueue.length > 10) signalsQueue.splice(10);
+
+  renderSignals();
+  process.stdout.write("\x07"); // beep alert
+}
+
+function renderSignals() {
+  console.clear();
+  console.log(chalk.blue.bold("🚀 KeamxFx VIP SMC Signals\n"));
+  if (!signalsQueue.length) {
+    console.log("Waiting for new signals...\n");
+  } else {
+    signalsQueue.forEach((s, i) => {
+      const color = s.action === "BUY" ? chalk.green : chalk.red;
+      const ageSec = Math.round((Date.now() - s.ts) / 1000);
+      console.log(`${i + 1}. ${color(s.action)} ${s.symbol}  ${chalk.dim(`(${ageSec}s ago)`)}`);
+      console.log(`   Entry: ${s.entry.toFixed(5)} | SL: ${s.sl.toFixed(5)} | TP: ${s.tp.toFixed(5)} | ATR: ${s.atr.toFixed(5)}\n`);
+    });
+  }
+  console.log(chalk.yellow("Commands: refresh | list"));
 }
 
 // ===== WEBSOCKET =====
