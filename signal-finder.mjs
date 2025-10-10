@@ -11,6 +11,24 @@ import express from "express";
 import WebSocket from "ws";
 import readline from "readline";
 import chalk from "chalk";
+import { onValue } from "firebase/database";
+import { initializeApp } from "firebase/app";
+import { getDatabase, ref, push } from "firebase/database";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAMCVlEPPKA8hSNFF4ruBTayTV_deWsXXw",
+  authDomain: "pularix-88abb.firebaseapp.com",
+  databaseURL: "https://pularix-88abb-default-rtdb.firebaseio.com",
+  projectId: "pularix-88abb",
+  storageBucket: "pularix-88abb.firebasestorage.app",
+  messagingSenderId: "877314756477",
+  appId: "1:877314756477:web:a925edffd31eea18d7c614",
+  measurementId: "G-WYLDRHKV86"
+};
+
+// Initialize Firebase
+const appFB = initializeApp(firebaseConfig);
+const db = getDatabase(appFB);
 
 // ===== CONFIG =====
 const API_TOKEN = "MrUiWBFYmsfrsjC";
@@ -41,6 +59,16 @@ const miniCandles = {};
 const timeframeCandles = {}; // [symbol] = [1mArray, 5mArray]
 const lastSignalAt = {};
 const signalsQueue = [];
+
+// Listen for updates from Firebase
+onValue(ref(db, "signals/"), (snapshot) => {
+  const data = snapshot.val();
+  if (data) {
+    const list = Object.values(data).reverse();
+    signalsQueue.length = 0;
+    signalsQueue.push(...list.slice(0, 10)); // show latest 10 signals
+  }
+});
 const crossoverHistory = {}; // track last N cross states per symbol
 
 // ===== READLINE =====
@@ -315,6 +343,8 @@ function evaluateSymbol(symbol) {
     atr: safeAtr,
     ts: now
   };
+
+push(ref(db, "signals/"), sig);
 
   // push newest at front, trim
   signalsQueue.unshift(sig);
