@@ -7,6 +7,7 @@
  * - Minor safety: rate-limit signals per symbol (cooldown)
  */
 
+import express from "express";
 import WebSocket from "ws";
 import readline from "readline";
 import chalk from "chalk";
