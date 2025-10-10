@@ -1,5 +1,3 @@
-CURRENT
-
 #!/usr/bin/env node
 /**
  * Improved Fast SMC Volatility Signals with Mini-Candles (10s)
