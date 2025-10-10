@@ -130,7 +130,7 @@ return `
 }).join("");
 
 if (!tableRows) {
-tableRows = <tr><td colspan="7" style="text-align:center;">No signals yet ⚡</td></tr>;
+tableRows = `<tr><td colspan="7" style="text-align:center;">No signals yet ⚡</td></tr>`;
 }
 
 res.send(`
