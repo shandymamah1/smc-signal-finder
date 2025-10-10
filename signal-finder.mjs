@@ -62,7 +62,6 @@ rl.on("line", (line) => {
 });
 
 /* ===== EXPRESS ===== */
-const app = express();
 
 // ✅ your new route
 app.get("/", (req, res) => {
