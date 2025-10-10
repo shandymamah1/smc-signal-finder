@@ -89,17 +89,32 @@ app.get("/", (req, res) => {
 app.get("/signals", (req, res) => {
   let latest = signalsQueue[0]?.ts || 0;
 
+  // Symbol mapping
+  const symbolMap = {
+    "R_10": "v10",
+    "R_25": "v25",
+    "R_50": "v50",
+    "R_75": "v75",
+    "R_100": "v100"
+  };
+
   let tableRows = signalsQueue.map((sig, i) => {
     const highlightClass = sig.ts === latest ? "highlight" : "";
+    
+    // Convert timestamp to Botswana time (+2 GMT)
+    const botswanaTime = new Date(sig.ts + 2 * 3600 * 1000)
+                          .toISOString()
+                          .substr(11, 8); // HH:MM:SS
+    
     return `
       <tr class="${highlightClass}">
-        <td>${sig.symbol}</td>
+        <td>${symbolMap[sig.symbol] || sig.symbol}</td>
         <td style="color:${sig.action === "BUY" ? "green" : "red"}; font-weight:bold;">${sig.action}</td>
         <td>${Number(sig.entry).toFixed(5)}</td>
         <td>${Number(sig.sl).toFixed(5)}</td>
         <td>${Number(sig.tp).toFixed(5)}</td>
         <td>${Number(sig.atr).toFixed(5)}</td>
-        <td>${new Date(sig.ts).toLocaleTimeString()}</td>
+        <td>${botswanaTime}</td>
       </tr>`;
   }).join("");
 
@@ -131,7 +146,7 @@ app.get("/signals", (req, res) => {
     </head>
     <body>
       <h1 style="text-align:center;">📊 Keamzfx VIP SMC Signals</h1>
-<h2 style="text-align:center;">📞APP or CALL:77372529</h2>
+      <h2 style="text-align:center;">📞APP or CALL:77372529</h2>
       <table>
         <thead>
           <tr>
@@ -155,7 +170,6 @@ app.get("/signals", (req, res) => {
       </audio>
       <script>
         const sound = document.getElementById("alertSound");
-        // play alert if highlighted signal exists
         if (document.querySelector(".highlight")) {
           sound.volume = 0.4;
           sound.play().catch(()=>{});
