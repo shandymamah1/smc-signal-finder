@@ -1,17 +1,29 @@
 #!/usr/bin/env node
 /**
-• Improved Fast SMC Volatility Signals with Mini-Candles (10s)
-• Fixed EMA/RSI/ATR implementations
-• Added crossover confirmation and 1m trend filter
-• Wider SL/TP (ATR multipliers) so you can "wait for profit"
-• Minor safety: rate-limit signals per symbol (cooldown)
+
+Improved Fast SMC Volatility Signals with Mini-Candles (10s)
+
+Fixed EMA/RSI/ATR implementations
+
+
+Added crossover confirmation and 1m trend filter
+
+
+Wider SL/TP (ATR multipliers) so you can "wait for profit"
+
+
+Minor safety: rate-limit signals per symbol (cooldown)
 */
+
+
+
 import express from "express";
 import WebSocket from "ws";
 import readline from "readline";
 import chalk from "chalk";
 import { initializeApp as initFirebase } from "firebase/app";
 import { getDatabase, ref, onValue, set, update, push } from "firebase/database";
+
 // ===== Firebase Config =====
 const firebaseConfig = {
 apiKey: "AIzaSyAMCVlEPPKA8hSNFF4ruBTayTV_deWsXXw",
@@ -22,33 +34,41 @@ storageBucket: "pularix-88abb.appspot.com",
 messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
 appId: "YOUR_APP_ID",
 };
+
 // ===== Initialize Firebase =====
 const firebaseApp = initFirebase(firebaseConfig);
 const db = getDatabase(firebaseApp);
+
 // ===== CONFIG =====
 const API_TOKEN = "MrUiWBFYmsfrsjC";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
 const MAX_HISTORY = 400; // keep more history for indicators
 const MINI_CANDLE_MS = 10_000;
 const COOLDOWN_MS = 60 * 1000;
+
 const MAX_SIGNALS_STORED = 10; // number of signals to keep in memory
+
 const EMA_FAST = 15;
 const EMA_SLOW = 30;
-const RSI_PERIOD = 10;
+const RSI_PERIOD = 14;
 const ATR_PERIOD = 10;
+
 // Confirmation & filters
 const CROSS_CONFIRMATION = 3; // crossover must persist for this many mini-candles
 const RSI_BUY_THRESHOLD = 60; // require stronger momentum
 const RSI_SELL_THRESHOLD = 40;
 const MIN_ATR = 0.00001; // avoid tiny ATR causing tiny SL/TP (tune for instrument)
+
 // Wider SL/TP multipliers per your request
-const SL_ATR_MULT = 3.5; // stop loss = entry +/- ATR * 4
-const TP_ATR_MULT = 7.5; // take profit = entry +/- ATR * 10
+const SL_ATR_MULT = 3.5;   // stop loss = entry +/- ATR * 4
+const TP_ATR_MULT = 7.5;  // take profit = entry +/- ATR * 10
+
 // ===== STATE =====
 const miniCandles = {};
 const timeframeCandles = {}; // [symbol] = [1mArray, 5mArray]
 const lastSignalAt = {};
 const signalsQueue = [];
+
 // Listen for updates from Firebase
 onValue(ref(db, "signals/"), (snapshot) => {
 const data = snapshot.val();
@@ -59,6 +79,7 @@ signalsQueue.push(...list.slice(0, 10)); // show latest 10 signals
 }
 });
 const crossoverHistory = {}; // track last N cross states per symbol
+
 // ===== READLINE =====
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 rl.on("line", (line) => {
@@ -66,16 +87,18 @@ const cmd = line.trim().toLowerCase();
 if (cmd === "list") renderSignals();
 if (cmd === "refresh") signalsQueue.length = 0;
 });
+
 /* ===== EXPRESS ===== */
 const app = express();
 const PORT = process.env.PORT || 3000;
-app.get("/", (req, res) => {
-res.send("Keamzfx VIP SMC Signals is running ✅ 
 
-View live signals here👉 /signals");
+app.get("/", (req, res) => {
+res.send("Keamzfx VIP SMC Signals is running ✅ <br><br>View live signals here👉 <a href='/signals'>/signals</a>");
 });
+
 app.get("/signals", (req, res) => {
 let latest = signalsQueue[0]?.ts || 0;
+
 // Symbol mapping
 const symbolMap = {
 "R_10": "v10",
@@ -84,49 +107,95 @@ const symbolMap = {
 "R_75": "v75",
 "R_100": "v100"
 };
+
 let tableRows = signalsQueue.map((sig, i) => {
 const highlightClass = sig.ts === latest ? "highlight" : "";
-// Convert timestamp to Botswana time (+2 GMT) const botswanaTime = new Date(sig.ts + 2 * 3600 * 1000) .toISOString() .substr(11, 8); // HH:MM:SS return ` <tr class="${highlightClass}"> <td>${symbolMap[sig.symbol] || sig.symbol}</td> <td style="color:${sig.action === "BUY" ? "green" : "red"}; font-weight:bold;">${sig.action}</td> <td>${Number(sig.entry).toFixed(5)}</td> <td>${Number(sig.sl).toFixed(5)}</td> <td>${Number(sig.tp).toFixed(5)}</td> <td>${Number(sig.atr).toFixed(5)}</td> <td>${botswanaTime}</td> </tr>`; 
+
+// Convert timestamp to Botswana time (+2 GMT)  
+const botswanaTime = new Date(sig.ts + 2 * 3600 * 1000)  
+                      .toISOString()  
+                      .substr(11, 8); // HH:MM:SS  
+  
+return `  
+  <tr class="${highlightClass}">  
+    <td>${symbolMap[sig.symbol] || sig.symbol}</td>  
+    <td style="color:${sig.action === "BUY" ? "green" : "red"}; font-weight:bold;">${sig.action}</td>  
+    <td>${Number(sig.entry).toFixed(5)}</td>  
+    <td>${Number(sig.sl).toFixed(5)}</td>  
+    <td>${Number(sig.tp).toFixed(5)}</td>  
+    <td>${Number(sig.atr).toFixed(5)}</td>  
+    <td>${botswanaTime}</td>  
+  </tr>`;
+
 }).join("");
+
 if (!tableRows) {
 tableRows = <tr><td colspan="7" style="text-align:center;">No signals yet ⚡</td></tr>;
 }
+
 res.send(`
-
-
-
-
-
-Keamzfx VIP SMC Signals
-<br /> body { font-family: Arial, sans-serif; background:#f8f9fa; padding:20px; }<br /> h2 { text-align:center; }<br /> table { border-collapse: collapse; width:100%; background:white; box-shadow:0 0 10px rgba(0,0,0,0.1); }<br /> th, td { padding:10px; border:1px solid #ddd; text-align:center; }<br /> th { background:#007bff; color:white; }<br /> tr.highlight { animation: flash 2s ease-in-out; }<br /> @keyframes flash {<br /> 0% { background: #fff7c2; }<br /> 50% { background: #fff2a8; }<br /> 100% { background: white; }<br /> }<br /> .small { font-size:12px; color:#666; text-align:center; margin-top:8px; }<br /> 
-
-
-📊 Keamzfx VIP SMC Signals
-
-📞APP or CALL:77372529
-
-
-
-
-Symbol
-Action
-Entry
-Stop Loss
-Take Profit
-ATR
-When
-
-
-
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta http-equiv="refresh" content="5" />
+<title>Keamzfx VIP SMC Signals</title>
+<style>
+body { font-family: Arial, sans-serif; background:#f8f9fa; padding:20px; }
+h2 { text-align:center; }
+table { border-collapse: collapse; width:100%; background:white; box-shadow:0 0 10px rgba(0,0,0,0.1); }
+th, td { padding:10px; border:1px solid #ddd; text-align:center; }
+th { background:#007bff; color:white; }
+tr.highlight { animation: flash 2s ease-in-out; }
+@keyframes flash {
+0% { background: #fff7c2; }
+50% { background: #fff2a8; }
+100% { background: white; }
+}
+.small { font-size:12px; color:#666; text-align:center; margin-top:8px; }
+</style>
+</head>
+<body>
+<h1 style="text-align:center;">📊 Keamzfx VIP SMC Signals</h1>
+<h2 style="text-align:center;">📞APP or CALL:77372529</h2>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Action</th>
+<th>Entry</th>
+<th>Stop Loss</th>
+<th>Take Profit</th>
+<th>ATR</th>
+<th>When</th>
+</tr>
+</thead>
+<tbody>
 ${tableRows}
+</tbody>
+</table>
+<p class="small">Auto-refreshes every 5s. Keeps last ${MAX_SIGNALS_STORED} signals.</p>
 
+<audio id="alertSound">  
+    <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">  
+  </audio>  
+  <script>  
+    const sound = document.getElementById("alertSound");  
+    if (document.querySelector(".highlight")) {  
+      sound.volume = 0.4;  
+      sound.play().catch(()=>{});  
+    }  
+  </script>  
+</body>  
+</html>
 
-Auto-refreshes every 5s. Keeps last ${MAX_SIGNALS_STORED} signals.
-<audio id="alertSound"> <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg"> </audio> <script> const sound = document.getElementById("alertSound"); if (document.querySelector(".highlight")) { sound.volume = 0.4; sound.play().catch(()=>{}); } </script> </body> </html> 
 `);
 });
+
 app.listen(PORT, () => console.log(🌐 Express server is listening on port ${PORT}));
+
 // ===== UTILITIES =====
+
 // Improved EMA (stable rolling version)
 function EMA(arr, period) {
 if (!arr || arr.length < period) return arr[arr.length - 1] || 0;
@@ -137,6 +206,7 @@ ema = arr[i] * k + ema * (1 - k);
 }
 return ema;
 }
+
 // Smoothed RSI (Wilder’s method)
 function RSI(arr, period = RSI_PERIOD) {
 if (!arr || arr.length < period + 1) return 50;
@@ -161,6 +231,7 @@ if (losses === 0) return 100;
 const rs = gains / losses;
 return 100 - 100 / (1 + rs);
 }
+
 // Wilder’s ATR (smoothed)
 function ATR(candles, period = ATR_PERIOD) {
 if (!candles || candles.length < period) return 0;
@@ -195,6 +266,7 @@ if (!miniCandles[symbol]) miniCandles[symbol] = [];
 const candles = miniCandles[symbol];
 const periodTs = Math.floor(ts / MINI_CANDLE_MS) * MINI_CANDLE_MS;
 let last = candles[candles.length - 1];
+
 if (!last || last.ts !== periodTs) {
 last = { open: price, high: price, low: price, close: price, ts: periodTs };
 candles.push(last);
@@ -206,6 +278,7 @@ last.low = Math.min(last.low, price);
 last.close = price;
 }
 }
+
 function updateTimeframeCandle(symbol, price, ts) {
 if (!timeframeCandles[symbol]) timeframeCandles[symbol] = [[], []]; // 1m & 5m
 const tfs = [60_000, 300_000];
@@ -225,6 +298,7 @@ last.close = price;
 }
 });
 }
+
 // ===== SIGNAL LOGIC =====
 function recordCrossover(symbol, direction) {
 // direction: 1 = fast>slow, -1 = fast<slow, 0 = neutral
@@ -234,6 +308,7 @@ hist.push({ dir: direction, ts: Date.now() });
 if (hist.length > CROSS_CONFIRMATION + 2) hist.shift(); // keep small window
 crossoverHistory[symbol] = hist;
 }
+
 function crossoverConfirmed(symbol, requiredDir) {
 const hist = crossoverHistory[symbol] || [];
 if (hist.length < CROSS_CONFIRMATION) return false;
@@ -243,19 +318,23 @@ if (hist[i].dir !== requiredDir) return false;
 }
 return true;
 }
+
 function evaluateSymbol(symbol) {
 if (!symbol) return;
 const now = Date.now();
 const candles = miniCandles[symbol];
 if (!candles || candles.length < EMA_SLOW + 2) return;
+
 const closes = candles.map(c => c.close);
 const emaFast = EMA(closes, EMA_FAST);
 const emaSlow = EMA(closes, EMA_SLOW);
 const rsi = RSI(closes);
 const lastClose = closes[closes.length - 1];
+
 // record crossover direction for confirmation
 const dir = emaFast > emaSlow ? 1 : (emaFast < emaSlow ? -1 : 0);
 recordCrossover(symbol, dir);
+
 // basic trend filter using 1m timeframe
 let trendOK = true;
 const tf1 = timeframeCandles[symbol] && timeframeCandles[symbol][0];
@@ -265,6 +344,7 @@ const tfEmaSlow = EMA(tfCloses, EMA_SLOW);
 if (dir === 1 && tfCloses[tfCloses.length - 1] < tfEmaSlow) trendOK = false;
 if (dir === -1 && tfCloses[tfCloses.length - 1] > tfEmaSlow) trendOK = false;
 }
+
 // Determine action
 let action = null;
 if (dir === 1 && rsi >= RSI_BUY_THRESHOLD && trendOK && crossoverConfirmed(symbol, 1)) {
@@ -272,27 +352,36 @@ action = "BUY";
 } else if (dir === -1 && rsi <= RSI_SELL_THRESHOLD && trendOK && crossoverConfirmed(symbol, -1)) {
 action = "SELL";
 }
+
 // Exit early if no valid action
 if (!action) return;
+
 const atr = ATR(candles, ATR_PERIOD) || MIN_ATR;
 const safeAtr = Math.max(atr, MIN_ATR);
+
 // Skip flat markets
 if (isFlatMarket(candles, safeAtr)) return;
+
 // Respect cooldown
 if (lastSignalAt[symbol] && now - lastSignalAt[symbol] < COOLDOWN_MS) return;
+
 // Calculate SL and TP
 const sl = action === "BUY" ? lastClose - safeAtr * SL_ATR_MULT : lastClose + safeAtr * SL_ATR_MULT;
 const tp = action === "BUY" ? lastClose + safeAtr * TP_ATR_MULT : lastClose - safeAtr * TP_ATR_MULT;
+
 // Record the signal
 lastSignalAt[symbol] = now;
 const sig = { symbol, action, entry: lastClose, sl, tp, atr: safeAtr, ts: now };
 push(ref(db, "signals/"), sig);
+
 // Update local queue
 signalsQueue.unshift(sig);
 if (signalsQueue.length > MAX_SIGNALS_STORED) signalsQueue.splice(MAX_SIGNALS_STORED);
+
 renderSignals();
 process.stdout.write("\x07"); // beep
 }
+
 function renderSignals() {
 console.clear();
 console.log(chalk.blue.bold("🚀 KeamxFx VIP SMC Signals\n"));
@@ -302,18 +391,21 @@ console.log("Waiting for new signals...\n");
 signalsQueue.forEach((s, i) => {
 const color = s.action === "BUY" ? chalk.green : chalk.red;
 const ageSec = Math.round((Date.now() - s.ts) / 1000);
-console.log(${i + 1}. ${color(s.action)} ${s.symbol} ${chalk.dim((${ageSec}s ago))});
-console.log( Entry: ${s.entry.toFixed(5)} | SL: ${s.sl.toFixed(5)} | TP: ${s.tp.toFixed(5)} | ATR: ${s.atr.toFixed(5)}\n);
+console.log(${i + 1}. ${color(s.action)} ${s.symbol}  ${chalk.dim((${ageSec}s ago))});
+console.log(   Entry: ${s.entry.toFixed(5)} | SL: ${s.sl.toFixed(5)} | TP: ${s.tp.toFixed(5)} | ATR: ${s.atr.toFixed(5)}\n);
 });
 }
 console.log(chalk.yellow("Commands: refresh | list"));
 }
+
 // ===== WEBSOCKET =====
 const ws = new WebSocket("wss://ws.binaryws.com/websockets/v3?app_id=1089");
+
 ws.on("open", () => {
 console.log("🔗 Connected. Authorized...");
 ws.send(JSON.stringify({ authorize: API_TOKEN }));
 });
+
 ws.on("message", (msg) => {
 try {
 const data = JSON.parse(msg);
@@ -336,6 +428,7 @@ console.log("❌", data.error.message);
 console.error("Failed to parse ws message:", err);
 }
 });
+
 ws.on("close", () => {
 console.log("❌ Connection closed. Reconnecting in 5s...");
 setTimeout(() => {
