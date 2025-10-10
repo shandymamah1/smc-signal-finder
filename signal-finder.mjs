@@ -131,8 +131,8 @@ app.get("/signals", (req, res) => {
       </style>
     </head>
     <body>
-      <h1>📊 Keamzfx VIP SMC Signals</h1>
-<h2> APP:77372529</h2>
+      <h1 style="text-align:center;">📊 Keamzfx VIP SMC Signals</h1>
+<h2 style="text-align:center;">APP or CAL:77372529</h2>
       <table>
         <thead>
           <tr>
