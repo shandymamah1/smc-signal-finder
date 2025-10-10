@@ -303,23 +303,6 @@ function isBearishEngulfing(candles) {
   const curr = candles[candles.length - 1];
   return curr.open > prev.close && curr.close < prev.open && curr.close < curr.open;
 }
-// fallback to engulfing patterns
-if (!action) {
-  if (isBullishEngulfing(candles) && trendOK) action = "BUY";
-  if (isBearishEngulfing(candles) && trendOK) action = "SELL";
-}
-
-// ==== INSERT SCORE CALCULATION HERE ====
-  const momentum = momentumCheck(candles, 5);
-  const bullishEngulfing = isBullishEngulfing(candles);
-  let score = 0;
-  if (dir === 1) score += 30; // EMA alignment
-  if (rsi >= RSI_BUY_THRESHOLD) score += 20;
-  if (momentum > 0.001) score += 20;
-  if (bullishEngulfing) score += 30;
-  // You can log the score if you want
-  console.log(`${symbol} signal score:`, score);
-  //
 
 // ===== CANDLE MANAGEMENT =====
 function updateMiniCandle(symbol, price, ts) {
@@ -392,15 +375,11 @@ function evaluateSymbol(symbol) {
   const rsi = RSI(closes);
   const lastClose = closes[closes.length - 1];
 
-  // record crossover direction for confirmation
   const dir = emaFast > emaSlow ? 1 : (emaFast < emaSlow ? -1 : 0);
   recordCrossover(symbol, dir);
 
-  // basic trend filter using 1m timeframe
- // Multi-timeframe trend strength filter
-let trendOK = isTrendStrong(symbol, dir);
-
-  // Determine action
+  let trendOK = isTrendStrong(symbol, dir);
+ // Determine action
 let action = null;
 
 // Primary EMA + RSI + trend + crossover
@@ -410,7 +389,7 @@ if (dir === 1 && rsi >= RSI_BUY_THRESHOLD && trendOK && crossoverConfirmed(symbo
   action = "SELL";
 }
 
-// Fallback to engulfing patterns only if no primary action
+// Fallback to engulfing patterns if no primary action
 if (!action) {
   const bullishEngulfing = isBullishEngulfing(candles);
   const bearishEngulfing = isBearishEngulfing(candles);
@@ -418,7 +397,15 @@ if (!action) {
   if (bearishEngulfing && trendOK) action = "SELL";
 }
 
-  // Exit early if no valid action
+// ==== SCORE CALCULATION (keep inside evaluateSymbol) ====
+const momentum = momentumCheck(candles, 5);
+const bullishEngulfing = isBullishEngulfing(candles);
+let score = 0;
+if (dir === 1) score += 30; // EMA alignment
+if (rsi >= RSI_BUY_THRESHOLD) score += 20;
+if (momentum > 0.001) score += 20;
+if (bullishEngulfing) score += 30;
+console.log(`${symbol} signal score:`, score);
   if (!action) return;
 
   const atr = ATR(candles, ATR_PERIOD) || MIN_ATR;
