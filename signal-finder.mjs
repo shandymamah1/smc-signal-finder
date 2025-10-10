@@ -11,9 +11,23 @@ import express from "express";
 import WebSocket from "ws";
 import readline from "readline";
 import chalk from "chalk";
-import { onValue } from "firebase/database";
-import { initializeApp } from "firebase/app";
-import { getDatabase, ref, push } from "firebase/database";
+import { initializeApp as initFirebase } from "firebase/app";
+import { getDatabase, ref, onValue, set, update, push } from "firebase/database";
+
+// ===== Firebase Config =====
+const firebaseConfig = {
+  apiKey: "AIzaSyAMCVlEPPKA8hSNFF4ruBTayTV_deWsXXw",
+  authDomain: "pularix-88abb.firebaseapp.com",
+  databaseURL: "https://pularix-88abb-default-rtdb.firebaseio.com",
+  projectId: "pularix-88abb",
+  storageBucket: "pularix-88abb.appspot.com",
+  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+  appId: "YOUR_APP_ID",
+};
+
+// ===== Initialize Firebase =====
+const firebaseApp = initFirebase(firebaseConfig);
+const db = getDatabase(firebaseApp);
 
 // ===== CONFIG =====
 const API_TOKEN = "MrUiWBFYmsfrsjC";
