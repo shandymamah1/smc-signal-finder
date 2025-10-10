@@ -7,17 +7,9 @@
  * - Minor safety: rate-limit signals per symbol (cooldown)
  */
 
-import express from "express";
 import WebSocket from "ws";
 import readline from "readline";
 import chalk from "chalk";
-
-// 1️⃣ Initialize app BEFORE using it
-const app = express();
-
-global.signalsQueue = global.signalsQueue || [];
-global.MAX_SIGNALS_STORED = global.MAX_SIGNALS_STORED || 5;
-
 
 // ===== CONFIG =====
 const API_TOKEN = "MrUiWBFYmsfrsjC";
@@ -30,11 +22,6 @@ const EMA_FAST = 5;
 const EMA_SLOW = 15;
 const RSI_PERIOD = 14;
 const ATR_PERIOD = 14;
-
-// signal-finder.mjs
-app.get("/signals", (req, res) => {
-  res.json(signalsQueue); // just send JSON data
-});
 
 // Confirmation & filters
 const CROSS_CONFIRMATION = 2; // crossover must persist for this many mini-candles
@@ -62,20 +49,15 @@ rl.on("line", (line) => {
 });
 
 /* ===== EXPRESS ===== */
-
-// ✅ your new route
-app.get("/", (req, res) => {
-  res.send("✅ SMC Signal Finder is live and running perfectly!");
-});
-
-// ✅ the rest of your logic here (signals, sockets, etc.)
-
+const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.get("/", (req, res) => {
+  res.send("SMC Signal Finder is running ✅ <br><br>View live signals at <a href='/signals'>/signals</a>");
+});
+
 app.get("/signals", (req, res) => {
-  let signalsQueue;
-if (!Array.isArray(signalsQueue)) signalsQueue = [];
-if (typeof MAX_SIGNALS_STORED === "undefined") global.MAX_SIGNALS_STORED = 5;
+  let latest = signalsQueue[0]?.ts || 0;
 
   let tableRows = signalsQueue.map((sig, i) => {
     const highlightClass = sig.ts === latest ? "highlight" : "";
@@ -92,7 +74,7 @@ if (typeof MAX_SIGNALS_STORED === "undefined") global.MAX_SIGNALS_STORED = 5;
   }).join("");
 
   if (!tableRows) {
-    tableRows = `<tr><td colspan="7" style="text-align:center;">Searching for signals📉📈</td></tr>`;
+    tableRows = `<tr><td colspan="7" style="text-align:center;">No signals yet ⚡</td></tr>`;
   }
 
   res.send(`
@@ -100,6 +82,7 @@ if (typeof MAX_SIGNALS_STORED === "undefined") global.MAX_SIGNALS_STORED = 5;
     <html>
     <head>
       <meta charset="utf-8"/>
+      <meta http-equiv="refresh" content="5" />
       <title>SMC Signal Finder - Live Signals</title>
       <style>
         body { font-family: Arial, sans-serif; background:#f8f9fa; padding:20px; }
@@ -117,13 +100,16 @@ if (typeof MAX_SIGNALS_STORED === "undefined") global.MAX_SIGNALS_STORED = 5;
       </style>
     </head>
     <body>
-      <h2>📊 KeamzFx (Live VIP SMC Signals)</h2>
+      <h2>📊 Live SMC Signals</h2>
       <table>
         <thead>
           <tr>
             <th>Symbol</th>
             <th>Action</th>
-            <th>Confirmations</th>
+            <th>Entry</th>
+            <th>Stop Loss</th>
+            <th>Take Profit</th>
+            <th>ATR</th>
             <th>When</th>
           </tr>
         </thead>
@@ -131,7 +117,19 @@ if (typeof MAX_SIGNALS_STORED === "undefined") global.MAX_SIGNALS_STORED = 5;
           ${tableRows}
         </tbody>
       </table>
-      <p class="small">Auto-refreshes every 5s. Keeps last ${global.MAX_SIGNALS_STORED} signals.</p>
+      <p class="small">Auto-refreshes every 5s. Keeps last ${MAX_SIGNALS_STORED} signals.</p>
+
+      <audio id="alertSound">
+        <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
+      </audio>
+      <script>
+        const sound = document.getElementById("alertSound");
+        // play alert if highlighted signal exists
+        if (document.querySelector(".highlight")) {
+          sound.volume = 0.4;
+          sound.play().catch(()=>{});
+        }
+      </script>
     </body>
     </html>
   `);
@@ -347,56 +345,26 @@ ws.on("open", () => {
   ws.send(JSON.stringify({ authorize: API_TOKEN }));
 });
 
-// ===== Basic Signal Detection =====
-function detectSignal(symbol, price) {
-  // Simple example logic:
-  // Generate a random signal to keep system running for now
-  const rand = Math.random();
-  if (rand > 0.7) {
-    return {
-      symbol,
-      action: rand > 0.85 ? "BUY" : "SELL",
-      confirmations: Math.floor(Math.random() * 5) + 1,
-      ts: Date.now(),
-    };
-  }
-  return null; // no signal
-}
-
 ws.on("message", (msg) => {
-  const data = JSON.parse(msg);
-
-  if (data.authorize) {
-    console.log("✅ Authorized. Subscribing to symbols...");
-    SYMBOLS.forEach(s => ws.send(JSON.stringify({ ticks: s })));
-
-  } else if (data.tick) {
-    const ts = Date.now();
-    const symbol = data.tick.symbol;
-    const price = data.tick.quote;
-
-    // Update your candle data
-    updateMiniCandle(symbol, price, ts);
-
-    // ====== SAMPLE SIGNAL DETECTION ======
-    // (replace this with your actual logic)
-    const signal = detectSignal(symbol, price); // your custom check function
-
-    if (signal) {
-      const newSignal = {
-        symbol: symbol,
-        action: signal.action, // "BUY" or "SELL"
-        confirmations: signal.confirmations || 1,
-        ts: ts,
-      };
-
-      // ✅ ADD THIS HERE
-      signalsQueue.unshift(newSignal);
-      if (signalsQueue.length > global.MAX_SIGNALS_STORED)
-        signalsQueue.pop();
-
-      console.log(`📊 ${symbol}: ${signal.action} signal saved (${signalsQueue.length} total)`);
+  try {
+    const data = JSON.parse(msg);
+    if (data.authorize) {
+      console.log("✅ Authorized. Subscribing to symbols...");
+      SYMBOLS.forEach(s => ws.send(JSON.stringify({ ticks: s })));
+      // schedule evaluation loop; keep it light
+      setInterval(() => SYMBOLS.forEach(s => {
+        try { evaluateSymbol(s); } catch (e) { /* swallow per-symbol errors */ }
+      }), 500);
+    } else if (data.tick) {
+      const ts = Date.now();
+      updateMiniCandle(data.tick.symbol, data.tick.quote, ts);
+      updateTimeframeCandle(data.tick.symbol, data.tick.quote, ts);
+    } else if (data.error) {
+      console.log("❌", data.error.message);
     }
+  } catch (err) {
+    // ignore JSON parse errors from non-standard messages
+    console.error("Failed to parse ws message:", err);
   }
 });
 
