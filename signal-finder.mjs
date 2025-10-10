@@ -129,8 +129,8 @@ app.get("/signals", (req, res) => {
     </style>
     </head>
     <body>
-      <h2>📊 Keamzfx VIP SMC Signals</h2>
-      <h3>📞 APP or CALL: 77372529</h3>
+      <h2 style="text-align: center;">📊 Keamzfx VIP SMC Signals</h2>
+<h3 style="text-align: center;">📞 APP or CALL: 77372529</h3>
       <table>
         <tr>
           <th>Symbol</th><th>Action</th><th>Entry</th><th>Stop Loss</th><th>Take Profit</th><th>ATR</th><th>When</th>
