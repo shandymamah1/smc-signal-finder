@@ -347,6 +347,22 @@ ws.on("open", () => {
   ws.send(JSON.stringify({ authorize: API_TOKEN }));
 });
 
+// ===== Basic Signal Detection =====
+function detectSignal(symbol, price) {
+  // Simple example logic:
+  // Generate a random signal to keep system running for now
+  const rand = Math.random();
+  if (rand > 0.7) {
+    return {
+      symbol,
+      action: rand > 0.85 ? "BUY" : "SELL",
+      confirmations: Math.floor(Math.random() * 5) + 1,
+      ts: Date.now(),
+    };
+  }
+  return null; // no signal
+}
+
 ws.on("message", (msg) => {
   const data = JSON.parse(msg);
 
