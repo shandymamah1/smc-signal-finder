@@ -53,6 +53,15 @@ const MIN_ATR = 0.00001; // avoid tiny ATR causing tiny SL/TP (tune for instrume
 const SL_ATR_MULT = 3.5;   // stop loss = entry +/- ATR * 4
 const TP_ATR_MULT = 7.5;  // take profit = entry +/- ATR * 10
 
+// ===== Trend Thresholds per symbol =====
+const TREND_SLOPE_THRESHOLDS = {
+  "R_10": 0.00015,
+  "R_25": 0.00018,
+  "R_50": 0.0002,
+  "R_75": 0.00022,
+  "R_100": 0.00025
+};
+
 // ===== STATE =====
 const miniCandles = {};
 const timeframeCandles = {}; // [symbol] = [1mArray, 5mArray]
@@ -248,6 +257,70 @@ function isFlatMarket(candles, atr) {
   const minClose = Math.min(...recent.map(c => c.close));
   return (maxClose - minClose) < atr * 0.2;
 }
+
+function momentumCheck(candles, period=5) {
+  if (candles.length < period) return 0;
+  const lastClose = candles[candles.length-1].close;
+  const prevClose = candles[candles.length-period].close;
+  return (lastClose - prevClose) / prevClose; // % movement
+}
+
+function isTrendStrong(symbol, dir) {
+  const tfs = timeframeCandles[symbol];
+  if (!tfs) return false;
+
+  let trendStrong = true;
+
+  tfs.forEach((candleArray, idx) => { // idx 0 = 1m, idx 1 = 5m
+    if (candleArray.length < EMA_SLOW + 1) return;
+
+    const closes = candleArray.map(c => c.close);
+    const emaSlowNow = EMA(closes, EMA_SLOW);
+    const emaSlowPrev = EMA(closes.slice(0, closes.length - 1), EMA_SLOW);
+    const slope = emaSlowNow - emaSlowPrev;
+
+    const threshold = TREND_SLOPE_THRESHOLDS[symbol] ?? 0.0002;
+if (Math.abs(slope) / closes[closes.length - 1] < threshold) trendStrong = false;
+
+    // Trend must align with direction
+    if (dir === 1 && slope < 0) trendStrong = false;
+    if (dir === -1 && slope > 0) trendStrong = false;
+  });
+
+  return trendStrong;
+}
+// ===== CANDLE PATTERNS =====
+function isBullishEngulfing(candles) {
+  if (candles.length < 2) return false;
+  const prev = candles[candles.length - 2];
+  const curr = candles[candles.length - 1];
+  return curr.open < prev.close && curr.close > prev.open && curr.close > curr.open;
+}
+
+function isBearishEngulfing(candles) {
+  if (candles.length < 2) return false;
+  const prev = candles[candles.length - 2];
+  const curr = candles[candles.length - 1];
+  return curr.open > prev.close && curr.close < prev.open && curr.close < curr.open;
+}
+// fallback to engulfing patterns
+if (!action) {
+  if (isBullishEngulfing(candles) && trendOK) action = "BUY";
+  if (isBearishEngulfing(candles) && trendOK) action = "SELL";
+}
+
+// ==== INSERT SCORE CALCULATION HERE ====
+  const momentum = momentumCheck(candles, 5);
+  const bullishEngulfing = isBullishEngulfing(candles);
+  let score = 0;
+  if (dir === 1) score += 30; // EMA alignment
+  if (rsi >= RSI_BUY_THRESHOLD) score += 20;
+  if (momentum > 0.001) score += 20;
+  if (bullishEngulfing) score += 30;
+  // You can log the score if you want
+  console.log(`${symbol} signal score:`, score);
+  //
+
 // ===== CANDLE MANAGEMENT =====
 function updateMiniCandle(symbol, price, ts) {
   if (!miniCandles[symbol]) miniCandles[symbol] = [];
@@ -324,22 +397,26 @@ function evaluateSymbol(symbol) {
   recordCrossover(symbol, dir);
 
   // basic trend filter using 1m timeframe
-  let trendOK = true;
-  const tf1 = timeframeCandles[symbol] && timeframeCandles[symbol][0];
-  if (tf1 && tf1.length >= EMA_SLOW) {
-    const tfCloses = tf1.map(c => c.close);
-    const tfEmaSlow = EMA(tfCloses, EMA_SLOW);
-    if (dir === 1 && tfCloses[tfCloses.length - 1] < tfEmaSlow) trendOK = false;
-    if (dir === -1 && tfCloses[tfCloses.length - 1] > tfEmaSlow) trendOK = false;
-  }
+ // Multi-timeframe trend strength filter
+let trendOK = isTrendStrong(symbol, dir);
 
   // Determine action
-  let action = null;
-  if (dir === 1 && rsi >= RSI_BUY_THRESHOLD && trendOK && crossoverConfirmed(symbol, 1)) {
-    action = "BUY";
-  } else if (dir === -1 && rsi <= RSI_SELL_THRESHOLD && trendOK && crossoverConfirmed(symbol, -1)) {
-    action = "SELL";
-  }
+let action = null;
+
+// Primary EMA + RSI + trend + crossover
+if (dir === 1 && rsi >= RSI_BUY_THRESHOLD && trendOK && crossoverConfirmed(symbol, 1)) {
+  action = "BUY";
+} else if (dir === -1 && rsi <= RSI_SELL_THRESHOLD && trendOK && crossoverConfirmed(symbol, -1)) {
+  action = "SELL";
+}
+
+// Fallback to engulfing patterns only if no primary action
+if (!action) {
+  const bullishEngulfing = isBullishEngulfing(candles);
+  const bearishEngulfing = isBearishEngulfing(candles);
+  if (bullishEngulfing && trendOK) action = "BUY";
+  if (bearishEngulfing && trendOK) action = "SELL";
+}
 
   // Exit early if no valid action
   if (!action) return;
@@ -353,9 +430,13 @@ function evaluateSymbol(symbol) {
   // Respect cooldown
   if (lastSignalAt[symbol] && now - lastSignalAt[symbol] < COOLDOWN_MS) return;
 
+const trendStrength = Math.abs(emaFast - emaSlow) / lastClose;
+const slMult = trendStrength > 0.001 ? 4 : 2; 
+const tpMult = trendStrength > 0.001 ? 8 : 4;
+
   // Calculate SL and TP
-  const sl = action === "BUY" ? lastClose - safeAtr * SL_ATR_MULT : lastClose + safeAtr * SL_ATR_MULT;
-  const tp = action === "BUY" ? lastClose + safeAtr * TP_ATR_MULT : lastClose - safeAtr * TP_ATR_MULT;
+  const sl = action === "BUY" ? lastClose - safeAtr * slMult : lastClose + safeAtr * slMult;
+const tp = action === "BUY" ? lastClose + safeAtr * tpMult : lastClose - safeAtr * tpMult;
 
   // Record the signal
   lastSignalAt[symbol] = now;
