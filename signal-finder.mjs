@@ -84,7 +84,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.get("/", (req, res) => {
-  res.send("SMC Signal Finder is running ✅ <br><br>View live signals at <a href='/signals'>/signals</a>");
+  res.send("Keamzfx VIP SMC Signals is running ✅ <br><br>View live signals here👉 <a href='/GET SIGNALS'>/signals</a>");
 });
 
 app.get("/signals", (req, res) => {
@@ -131,7 +131,8 @@ app.get("/signals", (req, res) => {
       </style>
     </head>
     <body>
-      <h2>📊 Live SMC Signals</h2>
+      <h1>📊 Keamzfx VIP SMC Signals</h1>
+<h2> APP:77372529</h2>
       <table>
         <thead>
           <tr>
@@ -166,7 +167,7 @@ app.get("/signals", (req, res) => {
   `);
 });
 
-app.listen(PORT, () => console.log(`🌐 Express server on port ${PORT}`));
+app.listen(PORT, () => console.log(`🌐 Express server is listening on port ${PORT}`));
 
 // ===== UTILITIES =====
 // EMA: standard SMA seed then EMA iteration
@@ -356,9 +357,9 @@ push(ref(db, "signals/"), sig);
 
 function renderSignals() {
   console.clear();
-  console.log(chalk.blue.bold("🚀 SMC Volatility Signals (Mini-Candles 10s) — Improved\n"));
+  console.log(chalk.blue.bold("🚀 KeamxFx VIP SMC Signals\n"));
   if (!signalsQueue.length) {
-    console.log("Waiting for signals...\n");
+    console.log("Waiting for new signals...\n");
   } else {
     signalsQueue.forEach((s, i) => {
       const color = s.action === "BUY" ? chalk.green : chalk.red;
@@ -374,7 +375,7 @@ function renderSignals() {
 const ws = new WebSocket("wss://ws.binaryws.com/websockets/v3?app_id=1089");
 
 ws.on("open", () => {
-  console.log("🔗 Connected. Authorizing...");
+  console.log("🔗 Connected. Authorized...");
   ws.send(JSON.stringify({ authorize: API_TOKEN }));
 });
 
@@ -382,7 +383,7 @@ ws.on("message", (msg) => {
   try {
     const data = JSON.parse(msg);
     if (data.authorize) {
-      console.log("✅ Authorized. Subscribing to symbols...");
+      console.log("✅ Authorized. Subscribed to signals...");
       SYMBOLS.forEach(s => ws.send(JSON.stringify({ ticks: s })));
       // schedule evaluation loop; keep it light
       setInterval(() => SYMBOLS.forEach(s => {
