@@ -38,20 +38,20 @@ const COOLDOWN_MS = 60 * 1000;
 
 const MAX_SIGNALS_STORED = 10; // number of signals to keep in memory
 
-const EMA_FAST = 5;
-const EMA_SLOW = 15;
+const EMA_FAST = 9;
+const EMA_SLOW = 21;
 const RSI_PERIOD = 14;
-const ATR_PERIOD = 14;
+const ATR_PERIOD = 10;
 
 // Confirmation & filters
-const CROSS_CONFIRMATION = 2; // crossover must persist for this many mini-candles
-const RSI_BUY_THRESHOLD = 55; // require stronger momentum
-const RSI_SELL_THRESHOLD = 45;
+const CROSS_CONFIRMATION = 3; // crossover must persist for this many mini-candles
+const RSI_BUY_THRESHOLD = 60; // require stronger momentum
+const RSI_SELL_THRESHOLD = 40;
 const MIN_ATR = 0.00001; // avoid tiny ATR causing tiny SL/TP (tune for instrument)
 
 // Wider SL/TP multipliers per your request
-const SL_ATR_MULT = 4;   // stop loss = entry +/- ATR * 4
-const TP_ATR_MULT = 10;  // take profit = entry +/- ATR * 10
+const SL_ATR_MULT = 3.5;   // stop loss = entry +/- ATR * 4
+const TP_ATR_MULT = 7.5;  // take profit = entry +/- ATR * 10
 
 // ===== STATE =====
 const miniCandles = {};
@@ -169,49 +169,48 @@ app.get("/signals", (req, res) => {
 app.listen(PORT, () => console.log(`🌐 Express server is listening on port ${PORT}`));
 
 // ===== UTILITIES =====
-// EMA: standard SMA seed then EMA iteration
+
+// Improved EMA (stable rolling version)
 function EMA(arr, period) {
-  if (!arr || arr.length === 0) return 0;
-  if (arr.length < period) return arr[arr.length - 1] || 0;
-  // seed with SMA of first 'period' values from the slice that ends at last index
-  const base = arr.length - period;
-  let sma = 0;
-  for (let i = base; i < base + period; i++) sma += arr[i];
-  sma = sma / period;
+  if (!arr || arr.length < period) return arr[arr.length - 1] || 0;
   const k = 2 / (period + 1);
-  let ema = sma;
-  for (let i = base + period; i < arr.length; i++) {
+  let ema = arr.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < arr.length; i++) {
     ema = arr[i] * k + ema * (1 - k);
   }
   return ema;
 }
 
-// RSI: simple average gains/losses over last `period` bars (classic)
+// Smoothed RSI (Wilder’s method)
 function RSI(arr, period = RSI_PERIOD) {
   if (!arr || arr.length < period + 1) return 50;
-  const end = arr.length - 1;
-  const start = end - period;
-  let gains = 0;
-  let losses = 0;
-  for (let i = start + 1; i <= end; i++) {
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
     const diff = arr[i] - arr[i - 1];
-    if (diff > 0) gains += diff;
-    else losses += Math.abs(diff);
+    if (diff >= 0) gains += diff; else losses -= diff;
   }
-  const avgGain = gains / period;
-  const avgLoss = losses / period;
-  if (avgLoss === 0 && avgGain === 0) return 50;
-  if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  return 100 - (100 / (1 + rs));
+  gains /= period;
+  losses /= period;
+  for (let i = period + 1; i < arr.length; i++) {
+    const diff = arr[i] - arr[i - 1];
+    if (diff >= 0) {
+      gains = (gains * (period - 1) + diff) / period;
+      losses = (losses * (period - 1)) / period;
+    } else {
+      gains = (gains * (period - 1)) / period;
+      losses = (losses * (period - 1) - diff) / period;
+    }
+  }
+  if (losses === 0) return 100;
+  const rs = gains / losses;
+  return 100 - 100 / (1 + rs);
 }
 
-// ATR: true range average for last ATR_PERIOD candles
+// Wilder’s ATR (smoothed)
 function ATR(candles, period = ATR_PERIOD) {
-  if (!candles || candles.length < 2) return 0;
-  const n = Math.min(period, candles.length - 1);
-  let sum = 0;
-  for (let i = candles.length - n; i < candles.length; i++) {
+  if (!candles || candles.length < period) return 0;
+  const trs = [];
+  for (let i = 1; i < candles.length; i++) {
     const cur = candles[i];
     const prev = candles[i - 1];
     const tr = Math.max(
@@ -219,18 +218,22 @@ function ATR(candles, period = ATR_PERIOD) {
       Math.abs(cur.high - prev.close),
       Math.abs(cur.low - prev.close)
     );
-    sum += tr;
+    trs.push(tr);
   }
-  return sum / n;
+  let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < trs.length; i++) {
+    atr = (atr * (period - 1) + trs[i]) / period;
+  }
+  return atr;
 }
-
-// when we want to check last N closes
-function lastCloses(candles, n) {
-  if (!candles || !candles.length) return [];
-  const start = Math.max(0, candles.length - n);
-  return candles.slice(start).map(c => c.close);
+// Flat market detection helper
+function isFlatMarket(candles, atr) {
+  if (!candles || candles.length < 3) return false;
+  const recent = candles.slice(-3);
+  const maxClose = Math.max(...recent.map(c => c.close));
+  const minClose = Math.min(...recent.map(c => c.close));
+  return (maxClose - minClose) < atr * 0.2;
 }
-
 // ===== CANDLE MANAGEMENT =====
 function updateMiniCandle(symbol, price, ts) {
   if (!miniCandles[symbol]) miniCandles[symbol] = [];
@@ -306,52 +309,51 @@ function evaluateSymbol(symbol) {
   const dir = emaFast > emaSlow ? 1 : (emaFast < emaSlow ? -1 : 0);
   recordCrossover(symbol, dir);
 
-  // basic trend filter using 1m timeframe (use slow EMA on 1m closes if available)
+  // basic trend filter using 1m timeframe
   let trendOK = true;
   const tf1 = timeframeCandles[symbol] && timeframeCandles[symbol][0];
   if (tf1 && tf1.length >= EMA_SLOW) {
     const tfCloses = tf1.map(c => c.close);
     const tfEmaSlow = EMA(tfCloses, EMA_SLOW);
-    // if emaSlow on 1m indicates opposite to signal direction, block
-    if (dir === 1 && tfCloses[tfCloses.length - 1] < tfEmaSlow) trendOK = false; // buy but 1m downtrend
-    if (dir === -1 && tfCloses[tfCloses.length - 1] > tfEmaSlow) trendOK = false; // sell but 1m uptrend
+    if (dir === 1 && tfCloses[tfCloses.length - 1] < tfEmaSlow) trendOK = false;
+    if (dir === -1 && tfCloses[tfCloses.length - 1] > tfEmaSlow) trendOK = false;
   }
 
+  // Determine action
   let action = null;
-  if (dir === 1 && rsi >= RSI_BUY_THRESHOLD && trendOK && crossoverConfirmed(symbol, 1)) action = "BUY";
-  if (dir === -1 && rsi <= RSI_SELL_THRESHOLD && trendOK && crossoverConfirmed(symbol, -1)) action = "SELL";
+  if (dir === 1 && rsi >= RSI_BUY_THRESHOLD && trendOK && crossoverConfirmed(symbol, 1)) {
+    action = "BUY";
+  } else if (dir === -1 && rsi <= RSI_SELL_THRESHOLD && trendOK && crossoverConfirmed(symbol, -1)) {
+    action = "SELL";
+  }
 
+  // Exit early if no valid action
   if (!action) return;
-  if (lastSignalAt[symbol] && now - lastSignalAt[symbol] < COOLDOWN_MS) return;
 
-  // compute ATR from mini-candles (use ATR_PERIOD)
   const atr = ATR(candles, ATR_PERIOD) || MIN_ATR;
-  // ensure atr isn't too small
   const safeAtr = Math.max(atr, MIN_ATR);
 
+  // Skip flat markets
+  if (isFlatMarket(candles, safeAtr)) return;
+
+  // Respect cooldown
+  if (lastSignalAt[symbol] && now - lastSignalAt[symbol] < COOLDOWN_MS) return;
+
+  // Calculate SL and TP
   const sl = action === "BUY" ? lastClose - safeAtr * SL_ATR_MULT : lastClose + safeAtr * SL_ATR_MULT;
   const tp = action === "BUY" ? lastClose + safeAtr * TP_ATR_MULT : lastClose - safeAtr * TP_ATR_MULT;
 
+  // Record the signal
   lastSignalAt[symbol] = now;
+  const sig = { symbol, action, entry: lastClose, sl, tp, atr: safeAtr, ts: now };
+  push(ref(db, "signals/"), sig);
 
-  const sig = {
-    symbol,
-    action,
-    entry: lastClose,
-    sl,
-    tp,
-    atr: safeAtr,
-    ts: now
-  };
-
-push(ref(db, "signals/"), sig);
-
-  // push newest at front, trim
+  // Update local queue
   signalsQueue.unshift(sig);
-  if (signalsQueue.length > 10) signalsQueue.splice(10);
+  if (signalsQueue.length > MAX_SIGNALS_STORED) signalsQueue.splice(MAX_SIGNALS_STORED);
 
   renderSignals();
-  process.stdout.write("\x07"); // beep alert
+  process.stdout.write("\x07"); // beep
 }
 
 function renderSignals() {
