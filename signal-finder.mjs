@@ -113,7 +113,7 @@ app.get("/signals", (req, res) => {
     <head>
       <meta charset="utf-8"/>
       <meta http-equiv="refresh" content="5" />
-      <title>SMC Signal Finder - Live Signals</title>
+      <title>Keamzfx VIP SMC Signals</title>
       <style>
         body { font-family: Arial, sans-serif; background:#f8f9fa; padding:20px; }
         h2 { text-align:center; }
@@ -131,7 +131,7 @@ app.get("/signals", (req, res) => {
     </head>
     <body>
       <h1 style="text-align:center;">📊 Keamzfx VIP SMC Signals</h1>
-<h2 style="text-align:center;">APP or CAL:77372529</h2>
+<h2 style="text-align:center;">📞APP or CALL:77372529</h2>
       <table>
         <thead>
           <tr>
