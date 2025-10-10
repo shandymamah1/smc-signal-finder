@@ -384,17 +384,17 @@ let action = null;
 
 // Primary EMA + RSI + trend + crossover
 if (dir === 1 && rsi >= RSI_BUY_THRESHOLD && trendOK && crossoverConfirmed(symbol, 1)) {
-  action = "BUY";
+  action = "SELL"; // flipped
 } else if (dir === -1 && rsi <= RSI_SELL_THRESHOLD && trendOK && crossoverConfirmed(symbol, -1)) {
-  action = "SELL";
+  action = "BUY"; // flipped
 }
 
 // Fallback to engulfing patterns if no primary action
 if (!action) {
   const bullishEngulfing = isBullishEngulfing(candles);
   const bearishEngulfing = isBearishEngulfing(candles);
-  if (bullishEngulfing && trendOK) action = "BUY";
-  if (bearishEngulfing && trendOK) action = "SELL";
+  if (bullishEngulfing && trendOK) action = "SELL";
+  if (bearishEngulfing && trendOK) action = "BUY";
 }
 
 // ==== SCORE CALCULATION (keep inside evaluateSymbol) ====
