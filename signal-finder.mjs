@@ -84,7 +84,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.get("/", (req, res) => {
-  res.send("Keamzfx VIP SMC Signals is running ✅ <br><br>View live signals here👉 <a href='/GET SIGNALS'>/signals</a>");
+  res.send("Keamzfx VIP SMC Signals is running ✅ <br><br>View live signals here👉 <a href='/signals'>/signals</a>");
 });
 
 app.get("/signals", (req, res) => {
