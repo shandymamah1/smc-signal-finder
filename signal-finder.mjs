@@ -263,84 +263,70 @@ function updateTimeframeCandle(symbol, price, ts) {
 }
 
 // ===== SIGNAL LOGIC =====
-function recordCrossover(symbol, direction) {
-  if (!crossoverHistory[symbol]) crossoverHistory[symbol] = [];
-  const hist = crossoverHistory[symbol];
-  hist.push({ dir: direction, ts: Date.now() });
-  if (hist.length > CROSS_CONFIRMATION + 2) hist.shift();
-  crossoverHistory[symbol] = hist;
-}
-
-function crossoverConfirmed(symbol, requiredDir) {
-  const hist = crossoverHistory[symbol] || [];
-  if (hist.length < CROSS_CONFIRMATION) return false;
-  for (let i = hist.length - CROSS_CONFIRMATION; i < hist.length; i++) {
-    if (hist[i].dir !== requiredDir) return false;
-  }
-  return true;
-}
-
 function evaluateSymbol(symbol) {
-  if (!symbol) return;
   const now = Date.now();
   const candles = miniCandles[symbol];
-  if (!candles || candles.length < EMA_SLOW + 2) return;
+  if (!candles || candles.length < EMA_SLOW) return;
+
   const closes = candles.map(c => c.close);
   const emaFast = EMA(closes, EMA_FAST);
   const emaSlow = EMA(closes, EMA_SLOW);
   const rsi = RSI(closes);
   const lastClose = closes[closes.length - 1];
-  const dir = emaFast > emaSlow ? 1 : (emaFast < emaSlow ? -1 : 0);
-  recordCrossover(symbol, dir);
-  let trendOK = true;
-  const tf1 = timeframeCandles[symbol] && timeframeCandles[symbol][0];
-  if (tf1 && tf1.length >= EMA_SLOW) {
-    const tfCloses = tf1.map(c => c.close);
-    const tfEmaSlow = EMA(tfCloses, EMA_SLOW);
-    if (dir === 1 && tfCloses[tfCloses.length - 1] < tfEmaSlow) trendOK = false;
-    if (dir === -1 && tfCloses[tfCloses.length - 1] > tfEmaSlow) trendOK = false;
-  }
 
   let action = null;
-  if (dir === 1 && rsi >= RSI_BUY_THRESHOLD && trendOK && crossoverConfirmed(symbol, 1)) {
-    action = "BUY";
-  } else if (dir === -1 && rsi <= RSI_SELL_THRESHOLD && trendOK && crossoverConfirmed(symbol, -1)) {
-    action = "SELL";
-  }
-  if (!action) return;
-// Require RSI trend agreement with direction
-if ((action === "BUY" && rsi < 55) || (action === "SELL" && rsi > 45)) return;
+  if (emaFast > emaSlow && rsi > 50) action = "BUY";
+  if (emaFast < emaSlow && rsi < 50) action = "SELL";
 
-  const atr = ATR(candles, ATR_PERIOD) || MIN_ATR;
-  const safeAtr = Math.max(atr, MIN_ATR);
-  if (isFlatMarket(candles, safeAtr)) return;
+  // cooldown
+  if (!action) return;
   if (lastSignalAt[symbol] && now - lastSignalAt[symbol] < COOLDOWN_MS) return;
 
-  const sl = action === "BUY" ? lastClose - safeAtr * SL_ATR_MULT : lastClose + safeAtr * SL_ATR_MULT;
-  const tp = action === "BUY" ? lastClose + safeAtr * TP_ATR_MULT : lastClose - safeAtr * TP_ATR_MULT;
+  const atr = ATR(candles);
+  const sl = action === "BUY" ? lastClose - atr * 3 : lastClose + atr * 3;
+  const tp = action === "BUY" ? lastClose + atr * 6 : lastClose - atr * 6;
 
+  const sig = {
+    symbol,
+    action,
+    entry: lastClose,
+    sl,
+    tp,
+    atr,
+    ts: now,
+  };
+
+  // save to Firebase
   lastSignalAt[symbol] = now;
-  const sig = { symbol, action, entry: lastClose, sl, tp, atr: safeAtr, ts: now };
   push(ref(db, "signals/"), sig);
+
+  // store locally
   signalsQueue.unshift(sig);
-  if (signalsQueue.length > MAX_SIGNALS_STORED) signalsQueue.splice(MAX_SIGNALS_STORED);
+  if (signalsQueue.length > MAX_SIGNALS_STORED)
+    signalsQueue.splice(MAX_SIGNALS_STORED);
+
   renderSignals();
-  process.stdout.write("\x07");
+  process.stdout.write("\x07"); // beep
 }
 
 function renderSignals() {
   console.clear();
-  console.log(chalk.blue.bold("🚀 KeamxFx VIP SMC Signals\n"));
+  console.log(chalk.blue.bold("🚀 Keamzfx VIP SMC Signals (FAST Mode)\n"));
+
   if (!signalsQueue.length) {
-    console.log("Waiting for new signals...\n");
+    console.log("Waiting for signals...\n");
   } else {
     signalsQueue.forEach((s, i) => {
       const color = s.action === "BUY" ? chalk.green : chalk.red;
-      const ageSec = Math.round((Date.now() - s.ts) / 1000);
-      console.log(`${i + 1}. ${color(s.action)} ${s.symbol} ${chalk.dim(`(${ageSec}s ago)`)}`);
-      console.log(` Entry: ${s.entry.toFixed(5)} | SL: ${s.sl.toFixed(5)} | TP: ${s.tp.toFixed(5)} | ATR: ${s.atr.toFixed(5)}\n`);
+      console.log(`${i + 1}. ${color(s.action)} ${s.symbol}`);
+      console.log(
+        `   Entry: ${s.entry.toFixed(5)} | SL: ${s.sl.toFixed(
+          5
+        )} | TP: ${s.tp.toFixed(5)} | ATR: ${s.atr.toFixed(5)}\n`
+      );
     });
   }
+
   console.log(chalk.yellow("Commands: refresh | list"));
 }
 
