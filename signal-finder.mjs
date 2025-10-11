@@ -273,7 +273,7 @@ function updateTimeframeCandle(symbol, price, ts) {
 function evaluateSymbol(symbol) {
   const now = Date.now();
   const candles = miniCandles[symbol];
-  if (!candles || candles.length < EMA_SLOW + 2) return; // a little extra data for smoother calc
+  if (!candles || candles.length < EMA_SLOW + 2) return;
 
   const closes = candles.map(c => c.close);
   const emaFast = EMA(closes, EMA_FAST);
@@ -281,29 +281,31 @@ function evaluateSymbol(symbol) {
   const rsi = RSI(closes);
   const lastClose = closes.at(-1);
 
-  // --- price & momentum checks ---
+  // --- stable direction check ---
   const prevFast = EMA(closes.slice(0, -1), EMA_FAST);
   const prevSlow = EMA(closes.slice(0, -1), EMA_SLOW);
+  const prevRsi = RSI(closes.slice(0, -1));
 
   let action = null;
 
-  // ✅ EMA crossover with direction check (prevents flat fakeouts)
-  const crossedUp = prevFast <= prevSlow && emaFast > emaSlow;
-  const crossedDown = prevFast >= prevSlow && emaFast < emaSlow;
+  // ✅ React only if momentum direction stays consistent for 2+ candles
+  const fastTrendUp = emaFast > emaSlow && prevFast > prevSlow;
+  const fastTrendDown = emaFast < emaSlow && prevFast < prevSlow;
 
-  if ((crossedUp || emaFast > emaSlow) && rsi > 50) action = "BUY";
-  else if ((crossedDown || emaFast < emaSlow) && rsi < 50) action = "SELL";
+  if (fastTrendUp && rsi > 52 && prevRsi > 50) action = "BUY";
+  if (fastTrendDown && rsi < 48 && prevRsi < 50) action = "SELL";
 
+  // --- stop here if nothing valid ---
   if (!action) return;
 
-  // --- small noise filter (ignore micro ATRs / tight ranges) ---
+  // --- avoid false ticks during tight ranges ---
   const atr = ATR(candles);
-  if (atr < 0.00001) return; // avoids false entries during low volatility
+  if (atr < 0.000015) return; // small ATR → no volatility → skip
 
   // --- cooldown ---
   if (lastSignalAt[symbol] && now - lastSignalAt[symbol] < COOLDOWN_MS) return;
 
-  // --- signal build ---
+  // --- build trade ---
   const slMult = 3;
   const tpMult = 6;
   const sl = action === "BUY" ? lastClose - atr * slMult : lastClose + atr * slMult;
@@ -319,7 +321,7 @@ function evaluateSymbol(symbol) {
     ts: now,
   };
 
-  // --- store & output ---
+  // --- save ---
   lastSignalAt[symbol] = now;
   push(ref(db, "signals/"), sig);
 
@@ -328,12 +330,12 @@ function evaluateSymbol(symbol) {
     signalsQueue.splice(MAX_SIGNALS_STORED);
 
   renderSignals();
-  process.stdout.write("\x07"); // beep
+  process.stdout.write("\x07");
 }
 
 function renderSignals() {
   console.clear();
-  console.log(chalk.blue.bold("🚀 Keamzfx VIP SMC Signals (Optimized Fast Mode)\n"));
+  console.log(chalk.blue.bold("🚀 Keamzfx VIP SMC Signals (Stable Mode)\n"));
 
   if (!signalsQueue.length) {
     console.log("Waiting for signals...\n");
