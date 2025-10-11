@@ -142,12 +142,18 @@ app.get("/signals", (req, res) => {
         <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
       </audio>
       <script>
-        const sound = document.getElementById("alertSound");
-        if (document.querySelector(".highlight")) {
-          sound.volume = 0.4;
-          sound.play().catch(()=>{});
-        }
-      </script>
+  // Play sound when a new signal appears
+  const sound = document.getElementById("alertSound");
+  if (document.querySelector(".highlight")) {
+    sound.volume = 0.4;
+    sound.play().catch(()=>{});
+  }
+
+  // Auto-refresh page every 5 seconds
+  setTimeout(() => {
+    location.reload();
+  }, 5000);
+</script>
     </body>
     </html>
   `);
