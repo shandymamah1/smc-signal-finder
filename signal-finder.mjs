@@ -273,55 +273,74 @@ function updateTimeframeCandle(symbol, price, ts) {
 function evaluateSymbol(symbol) {
   const now = Date.now();
   const candles = miniCandles[symbol];
-  if (!candles || candles.length < EMA_SLOW + 2) return;
+  if (!candles || candles.length < EMA_SLOW + 3) return;
 
   const closes = candles.map(c => c.close);
   const emaFast = EMA(closes, EMA_FAST);
   const emaSlow = EMA(closes, EMA_SLOW);
   const rsi = RSI(closes);
   const lastClose = closes.at(-1);
+  const lastCandle = candles.at(-1);
 
-  // --- stable direction check ---
+  // --- lookback for context ---
   const prevFast = EMA(closes.slice(0, -1), EMA_FAST);
   const prevSlow = EMA(closes.slice(0, -1), EMA_SLOW);
   const prevRsi = RSI(closes.slice(0, -1));
+  const prevClose = closes.at(-2);
+
+  const emaDiff = Math.abs(emaFast - emaSlow);
+
+  // --- detect direction ---
+  const bullish = emaFast > emaSlow && rsi > 52;
+  const bearish = emaFast < emaSlow && rsi < 48;
+
+  // --- detect trend consistency (momentum check) ---
+  const stableUp = bullish && prevFast > prevSlow && prevRsi > 50;
+  const stableDown = bearish && prevFast < prevSlow && prevRsi < 50;
+
+  // --- candle conviction (body vs range) ---
+  const body = Math.abs(lastCandle.close - lastCandle.open);
+  const range = lastCandle.high - lastCandle.low;
+  const bodyRatio = body / (range || 1);
+
+  // --- ignore tiny, indecisive candles ---
+  if (bodyRatio < 0.25) return;
+
+  // --- adaptive volatility and strength checks ---
+  const atr = ATR(candles);
+  if (atr < 0.000012) return; // skip low-vol sessions
+  const minEmaGap = atr * 0.25; // 25% ATR gap needed for real divergence
 
   let action = null;
+  if (stableUp && emaDiff > minEmaGap) action = "BUY";
+  if (stableDown && emaDiff > minEmaGap) action = "SELL";
 
-  // ✅ React only if momentum direction stays consistent for 2+ candles
-  const fastTrendUp = emaFast > emaSlow && prevFast > prevSlow;
-  const fastTrendDown = emaFast < emaSlow && prevFast < prevSlow;
-
-  if (fastTrendUp && rsi > 52 && prevRsi > 50) action = "BUY";
-  if (fastTrendDown && rsi < 48 && prevRsi < 50) action = "SELL";
-
-  // --- stop here if nothing valid ---
   if (!action) return;
 
-  // --- avoid false ticks during tight ranges ---
-  const atr = ATR(candles);
-  if (atr < 0.000015) return; // small ATR → no volatility → skip
+  // --- cooldown memory to prevent flip-flop ---
+  if (
+    signalsQueue[0]?.symbol === symbol &&
+    signalsQueue[0]?.action !== action &&
+    now - signalsQueue[0].ts < 12000
+  ) {
+    return; // prevent immediate reversal
+  }
 
-  // --- cooldown ---
-  if (lastSignalAt[symbol] && now - lastSignalAt[symbol] < COOLDOWN_MS) return;
+  if (
+    lastSignalAt[symbol] &&
+    now - lastSignalAt[symbol] < COOLDOWN_MS &&
+    signalsQueue[0]?.action === action
+  ) {
+    return;
+  }
 
-  // --- build trade ---
+  // --- SL/TP ---
   const slMult = 3;
   const tpMult = 6;
   const sl = action === "BUY" ? lastClose - atr * slMult : lastClose + atr * slMult;
   const tp = action === "BUY" ? lastClose + atr * tpMult : lastClose - atr * tpMult;
 
-  const sig = {
-    symbol,
-    action,
-    entry: lastClose,
-    sl,
-    tp,
-    atr,
-    ts: now,
-  };
-
-  // --- save ---
+  const sig = { symbol, action, entry: lastClose, sl, tp, atr, ts: now };
   lastSignalAt[symbol] = now;
   push(ref(db, "signals/"), sig);
 
@@ -335,7 +354,7 @@ function evaluateSymbol(symbol) {
 
 function renderSignals() {
   console.clear();
-  console.log(chalk.blue.bold("🚀 Keamzfx VIP SMC Signals (Stable Mode)\n"));
+  console.log(chalk.blue.bold("🚀 Keamzfx VIP SMC Signals (Smart Momentum 2.5)\n"));
 
   if (!signalsQueue.length) {
     console.log("Waiting for signals...\n");
