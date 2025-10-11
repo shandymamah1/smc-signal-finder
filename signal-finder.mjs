@@ -77,7 +77,14 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.get("/", (req, res) => {
-  res.send(`Keamzfx VIP SMC Signals is running ✅<br><br>View live signals here👉 /signals`);
+  res.send(`
+    Keamzfx VIP SMC Signals is running ✅
+    <br><br>
+    View live signals here 👉 
+    <a href="https://smc-signal-finder.onrender.com/signals" target="_blank">
+      /signals
+    </a>
+  `);
 });
 
 app.get("/signals", (req, res) => {
@@ -266,25 +273,41 @@ function updateTimeframeCandle(symbol, price, ts) {
 function evaluateSymbol(symbol) {
   const now = Date.now();
   const candles = miniCandles[symbol];
-  if (!candles || candles.length < EMA_SLOW) return;
+  if (!candles || candles.length < EMA_SLOW + 2) return; // a little extra data for smoother calc
 
   const closes = candles.map(c => c.close);
   const emaFast = EMA(closes, EMA_FAST);
   const emaSlow = EMA(closes, EMA_SLOW);
   const rsi = RSI(closes);
-  const lastClose = closes[closes.length - 1];
+  const lastClose = closes.at(-1);
+
+  // --- price & momentum checks ---
+  const prevFast = EMA(closes.slice(0, -1), EMA_FAST);
+  const prevSlow = EMA(closes.slice(0, -1), EMA_SLOW);
 
   let action = null;
-  if (emaFast > emaSlow && rsi > 50) action = "BUY";
-  if (emaFast < emaSlow && rsi < 50) action = "SELL";
 
-  // cooldown
+  // ✅ EMA crossover with direction check (prevents flat fakeouts)
+  const crossedUp = prevFast <= prevSlow && emaFast > emaSlow;
+  const crossedDown = prevFast >= prevSlow && emaFast < emaSlow;
+
+  if ((crossedUp || emaFast > emaSlow) && rsi > 50) action = "BUY";
+  else if ((crossedDown || emaFast < emaSlow) && rsi < 50) action = "SELL";
+
   if (!action) return;
+
+  // --- small noise filter (ignore micro ATRs / tight ranges) ---
+  const atr = ATR(candles);
+  if (atr < 0.00001) return; // avoids false entries during low volatility
+
+  // --- cooldown ---
   if (lastSignalAt[symbol] && now - lastSignalAt[symbol] < COOLDOWN_MS) return;
 
-  const atr = ATR(candles);
-  const sl = action === "BUY" ? lastClose - atr * 3 : lastClose + atr * 3;
-  const tp = action === "BUY" ? lastClose + atr * 6 : lastClose - atr * 6;
+  // --- signal build ---
+  const slMult = 3;
+  const tpMult = 6;
+  const sl = action === "BUY" ? lastClose - atr * slMult : lastClose + atr * slMult;
+  const tp = action === "BUY" ? lastClose + atr * tpMult : lastClose - atr * tpMult;
 
   const sig = {
     symbol,
@@ -296,11 +319,10 @@ function evaluateSymbol(symbol) {
     ts: now,
   };
 
-  // save to Firebase
+  // --- store & output ---
   lastSignalAt[symbol] = now;
   push(ref(db, "signals/"), sig);
 
-  // store locally
   signalsQueue.unshift(sig);
   if (signalsQueue.length > MAX_SIGNALS_STORED)
     signalsQueue.splice(MAX_SIGNALS_STORED);
@@ -311,20 +333,23 @@ function evaluateSymbol(symbol) {
 
 function renderSignals() {
   console.clear();
-  console.log(chalk.blue.bold("🚀 Keamzfx VIP SMC Signals (FAST Mode)\n"));
+  console.log(chalk.blue.bold("🚀 Keamzfx VIP SMC Signals (Optimized Fast Mode)\n"));
 
   if (!signalsQueue.length) {
     console.log("Waiting for signals...\n");
-  } else {
-    signalsQueue.forEach((s, i) => {
-      const color = s.action === "BUY" ? chalk.green : chalk.red;
-      console.log(`${i + 1}. ${color(s.action)} ${s.symbol}`);
-      console.log(
-        `   Entry: ${s.entry.toFixed(5)} | SL: ${s.sl.toFixed(
-          5
-        )} | TP: ${s.tp.toFixed(5)} | ATR: ${s.atr.toFixed(5)}\n`
-      );
-    });
+    return;
+  }
+
+  for (let i = 0; i < signalsQueue.length; i++) {
+    const s = signalsQueue[i];
+    const color = s.action === "BUY" ? chalk.greenBright : chalk.redBright;
+    console.log(`${i + 1}. ${color(s.action)} ${s.symbol}`);
+    console.log(
+      `   Entry: ${s.entry.toFixed(5)} | SL: ${s.sl.toFixed(5)} | TP: ${s.tp.toFixed(
+        5
+      )} | ATR: ${s.atr.toFixed(5)}`
+    );
+    console.log();
   }
 
   console.log(chalk.yellow("Commands: refresh | list"));
