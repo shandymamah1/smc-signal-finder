@@ -35,16 +35,16 @@ const MAX_HISTORY = 400;
 const MINI_CANDLE_MS = 10_000;
 const COOLDOWN_MS = 60 * 1000;
 const MAX_SIGNALS_STORED = 10;
-const EMA_FAST = 9;
-const EMA_SLOW = 21;
-const RSI_PERIOD = 14;
-const ATR_PERIOD = 10;
-const CROSS_CONFIRMATION = 3;
-const RSI_BUY_THRESHOLD = 60;
-const RSI_SELL_THRESHOLD = 40;
-const MIN_ATR = 0.00001;
-const SL_ATR_MULT = 3.5;
-const TP_ATR_MULT = 7.5;
+const EMA_FAST = 7;
+const EMA_SLOW = 12;
+const RSI_PERIOD = 21;          // smoother RSI, less noise
+const ATR_PERIOD = 14;          // smoother volatility estimation
+const CROSS_CONFIRMATION = 4;   // need stronger EMA direction confirmation
+const RSI_BUY_THRESHOLD = 65;   // wait for more strength before BUY
+const RSI_SELL_THRESHOLD = 35;  // wait for deeper weakness before SELL
+const MIN_ATR = 0.00002;        // avoid too-tight SL in quiet markets
+const SL_ATR_MULT = 4;          // slightly wider stop for swing tolerance
+const TP_ATR_MULT = 6;          // lower TP multiple → more realistic win rate
 
 // ===== STATE =====
 const miniCandles = {};
@@ -308,6 +308,8 @@ function evaluateSymbol(symbol) {
     action = "SELL";
   }
   if (!action) return;
+// Require RSI trend agreement with direction
+if ((action === "BUY" && rsi < 55) || (action === "SELL" && rsi > 45)) return;
 
   const atr = ATR(candles, ATR_PERIOD) || MIN_ATR;
   const safeAtr = Math.max(atr, MIN_ATR);
