@@ -294,5 +294,7 @@ ws.on("message", (msg) => {
 
 ws.on("close", () => {
   console.log("❌ Connection closed. Reconnecting in 5s...");
-  setTimeout(() => ws.terminate(), 5000);
+  setTimeout(() => {
+    process.exit(1); // let Render restart it automatically
+  }, 5000);
 });
