@@ -25,6 +25,7 @@ const API_TOKEN = "MrUiWBFYmsfrsjC";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
 const MAX_HISTORY = 200;
 const MINI_CANDLE_MS = 10_000;
+const MAX_SIGNALS_STORED = 10;
 const COOLDOWN_MS = 60 * 1000;
 
 const EMA_FAST = 5;
@@ -294,7 +295,5 @@ ws.on("message", (msg) => {
 
 ws.on("close", () => {
   console.log("❌ Connection closed. Reconnecting in 5s...");
-  setTimeout(() => {
-    process.exit(1); // let Render restart it automatically
-  }, 5000);
+  setTimeout(() => ws.terminate(), 5000);
 });
