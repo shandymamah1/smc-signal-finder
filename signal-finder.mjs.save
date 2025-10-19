@@ -1,3 +1,15 @@
+
+
+
+
+
+!/usr/bin/env node
+/**
+ * Fast SMC Volatility Signals with Mini-Candles (10s)
+ * + Color-coded terminal + Beep alerts
+ * + SL/TP display
+ */
+
 import express from "express";
 import WebSocket from "ws";
 import readline from "readline";
